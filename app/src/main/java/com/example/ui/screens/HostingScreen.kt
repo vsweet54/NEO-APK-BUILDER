@@ -1,5 +1,6 @@
 package com.example.ui.screens
 
+import android.content.ActivityNotFoundException
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -304,22 +305,45 @@ fun HostingScreen(viewModel: MainViewModel) {
                                 Toast.makeText(context, "Link unduhan disalin ke clipboard!", Toast.LENGTH_SHORT).show()
                             },
                             onDownload = {
-                                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(item.directDownloadUrl)).apply {
-                                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                                try {
+                                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(item.directDownloadUrl)).apply {
+                                        flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                                    }
+                                    if (intent.resolveActivity(context.packageManager) != null) {
+                                        context.startActivity(intent)
+                                    } else {
+                                        Toast.makeText(context, "Tidak ada browser untuk membuka tautan unduhan.", Toast.LENGTH_SHORT).show()
+                                    }
+                                } catch (e: ActivityNotFoundException) {
+                                    Toast.makeText(context, "Tidak ditemukan aplikasi browser di perangkat.", Toast.LENGTH_SHORT).show()
+                                } catch (e: Exception) {
+                                    Toast.makeText(context, "Gagal membuka link: ${e.message}", Toast.LENGTH_SHORT).show()
                                 }
-                                context.startActivity(intent)
                             },
                             onShare = {
-                                val shareIntent = Intent(Intent.ACTION_SEND).apply {
-                                    type = "text/plain"
-                                    putExtra(Intent.EXTRA_SUBJECT, "Unduh ${item.appName} APK")
-                                    putExtra(
-                                        Intent.EXTRA_TEXT,
-                                        "Unduh APK ${item.appName} v${item.versionName}:\n${item.directDownloadUrl}"
-                                    )
-                                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                                try {
+                                    val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                                        type = "text/plain"
+                                        putExtra(Intent.EXTRA_SUBJECT, "Unduh ${item.appName} APK")
+                                        putExtra(
+                                            Intent.EXTRA_TEXT,
+                                            "Unduh APK ${item.appName} v${item.versionName}:\n${item.directDownloadUrl}"
+                                        )
+                                        flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                                    }
+                                    val chooser = Intent.createChooser(shareIntent, "Bagikan Link APK").apply {
+                                        flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                                    }
+                                    if (shareIntent.resolveActivity(context.packageManager) != null) {
+                                        context.startActivity(chooser)
+                                    } else {
+                                        Toast.makeText(context, "Tidak ada aplikasi untuk membagikan tautan.", Toast.LENGTH_SHORT).show()
+                                    }
+                                } catch (e: ActivityNotFoundException) {
+                                    Toast.makeText(context, "Aplikasi untuk berbagi tidak tersedia.", Toast.LENGTH_SHORT).show()
+                                } catch (e: Exception) {
+                                    Toast.makeText(context, "Gagal membagikan link: ${e.message}", Toast.LENGTH_SHORT).show()
                                 }
-                                context.startActivity(Intent.createChooser(shareIntent, "Bagikan Link APK"))
                             },
                             onDelete = {
                                 viewModel.deleteHostedApk(item)
@@ -414,10 +438,20 @@ fun HostingScreen(viewModel: MainViewModel) {
                     item {
                         Button(
                             onClick = {
-                                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(serverUrl)).apply {
-                                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                                try {
+                                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(serverUrl)).apply {
+                                        flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                                    }
+                                    if (intent.resolveActivity(context.packageManager) != null) {
+                                        context.startActivity(intent)
+                                    } else {
+                                        Toast.makeText(context, "Tidak ada aplikasi browser yang terpasang.", Toast.LENGTH_SHORT).show()
+                                    }
+                                } catch (e: ActivityNotFoundException) {
+                                    Toast.makeText(context, "Tidak ada aplikasi browser di perangkat.", Toast.LENGTH_SHORT).show()
+                                } catch (e: Exception) {
+                                    Toast.makeText(context, "Gagal membuka browser: ${e.message}", Toast.LENGTH_SHORT).show()
                                 }
-                                context.startActivity(intent)
                             },
                             modifier = Modifier.fillMaxWidth(),
                             colors = ButtonDefaults.buttonColors(containerColor = NeonGreen, contentColor = CyberBg),

@@ -1,5 +1,6 @@
 package com.example.data
 
+import android.content.ActivityNotFoundException
 import android.content.ContentResolver
 import android.content.Context
 import android.content.Intent
@@ -307,13 +308,26 @@ class ProjectRepository(private val context: Context) {
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             if (!context.packageManager.canRequestPackageInstalls()) {
-                val intent = Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES).apply {
-                    data = Uri.parse("package:${context.packageName}")
-                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                try {
+                    val intent = Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES).apply {
+                        data = Uri.parse("package:${context.packageName}")
+                        flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                    }
+                    if (intent.resolveActivity(context.packageManager) != null) {
+                        context.startActivity(intent)
+                        Toast.makeText(context, "Aktifkan izin instalasi untuk melanjutkan", Toast.LENGTH_LONG).show()
+                        return
+                    }
+                } catch (e: Exception) {
+                    // Fallback to general security settings if app-specific settings not handled
+                    try {
+                        val secIntent = Intent(Settings.ACTION_SECURITY_SETTINGS).apply {
+                            flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                        }
+                        context.startActivity(secIntent)
+                        return
+                    } catch (ignored: Exception) {}
                 }
-                context.startActivity(intent)
-                Toast.makeText(context, "Aktifkan izin instalasi untuk melanjutkan", Toast.LENGTH_LONG).show()
-                return
             }
         }
 
@@ -325,7 +339,13 @@ class ProjectRepository(private val context: Context) {
                 setDataAndType(uri, "application/vnd.android.package-archive")
                 flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION
             }
-            context.startActivity(intent)
+            if (intent.resolveActivity(context.packageManager) != null) {
+                context.startActivity(intent)
+            } else {
+                Toast.makeText(context, "Tidak ada aplikasi pemasang paket (Package Installer) yang tersedia.", Toast.LENGTH_LONG).show()
+            }
+        } catch (e: ActivityNotFoundException) {
+            Toast.makeText(context, "Tidak ditemukan aplikasi pemasang paket di perangkat ini.", Toast.LENGTH_LONG).show()
         } catch (e: Exception) {
             Toast.makeText(context, "Gagal meluncurkan installer: ${e.message}", Toast.LENGTH_LONG).show()
         }
@@ -333,7 +353,10 @@ class ProjectRepository(private val context: Context) {
 
     fun shareApk(item: BuildHistoryItem) {
         val file = File(item.apkPath)
-        if (!file.exists()) return
+        if (!file.exists()) {
+            Toast.makeText(context, "Berkas APK tidak ditemukan untuk dibagikan", Toast.LENGTH_SHORT).show()
+            return
+        }
         try {
             val authority = "${context.packageName}.fileprovider"
             val uri = FileProvider.getUriForFile(context, authority, file)
@@ -343,9 +366,16 @@ class ProjectRepository(private val context: Context) {
                 putExtra(Intent.EXTRA_SUBJECT, "Download ${item.appName}")
                 flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION
             }
-            context.startActivity(Intent.createChooser(intent, "Bagikan APK ${item.appName}").apply {
+            val chooser = Intent.createChooser(intent, "Bagikan APK ${item.appName}").apply {
                 flags = Intent.FLAG_ACTIVITY_NEW_TASK
-            })
+            }
+            if (intent.resolveActivity(context.packageManager) != null) {
+                context.startActivity(chooser)
+            } else {
+                Toast.makeText(context, "Tidak ada aplikasi yang dapat menerima berkas ini.", Toast.LENGTH_SHORT).show()
+            }
+        } catch (e: ActivityNotFoundException) {
+            Toast.makeText(context, "Aplikasi untuk berbagi tidak tersedia.", Toast.LENGTH_SHORT).show()
         } catch (e: Exception) {
             Toast.makeText(context, "Gagal membagikan APK: ${e.message}", Toast.LENGTH_SHORT).show()
         }
