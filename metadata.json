@@ -1,0 +1,6 @@
+{
+  "name": "NEO APK BUILDER",
+  "description": "Android APK Builder for HTML, CSS, and JavaScript web projects directly on device",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
