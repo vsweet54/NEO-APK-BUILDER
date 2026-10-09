@@ -52,16 +52,10 @@ fun ConfigScreen(viewModel: MainViewModel) {
     var nativeBridge by remember(project) { mutableStateOf(project?.nativeBridge ?: true) }
     var domStorage by remember(project) { mutableStateOf(project?.domStorage ?: true) }
 
-    // Permissions toggles
-    var permInternet by remember { mutableStateOf(true) }
-    var permStorage by remember { mutableStateOf(true) }
-    var permDownload by remember { mutableStateOf(true) }
-    var permClipboard by remember { mutableStateOf(true) }
-    var permCamera by remember { mutableStateOf(true) }
-    var permAudio by remember { mutableStateOf(true) }
-    var permLocation by remember { mutableStateOf(true) }
-    var permVibrate by remember { mutableStateOf(true) }
-    var permNotification by remember { mutableStateOf(true) }
+    // Permissions state powered by PermissionManager
+    var selectedPermissions by remember(project) {
+        mutableStateOf(com.example.data.PermissionManager.parsePermissions(project?.permissions))
+    }
 
     val photoPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia()
@@ -81,16 +75,7 @@ fun ConfigScreen(viewModel: MainViewModel) {
 
     fun saveConfig() {
         val vCode = versionCode.toIntOrNull() ?: 1
-        val permsList = mutableListOf<String>()
-        if (permInternet) permsList.add("INTERNET")
-        if (permStorage) permsList.add("MEDIA")
-        if (permDownload) permsList.add("DOWNLOAD")
-        if (permClipboard) permsList.add("CLIPBOARD")
-        if (permCamera) permsList.add("CAMERA")
-        if (permAudio) permsList.add("AUDIO")
-        if (permLocation) permsList.add("LOCATION")
-        if (permVibrate) permsList.add("VIBRATE")
-        if (permNotification) permsList.add("NOTIFICATION")
+        val permsString = selectedPermissions.joinToString(",")
 
         viewModel.saveFullConfig(
             appName = appName,
@@ -104,7 +89,7 @@ fun ConfigScreen(viewModel: MainViewModel) {
             buildType = buildType,
             nativeBridge = nativeBridge,
             domStorage = domStorage,
-            permissions = permsList.joinToString(",")
+            permissions = permsString
         )
         Toast.makeText(context, "Konfigurasi berhasil disimpan!", Toast.LENGTH_SHORT).show()
     }
@@ -527,7 +512,7 @@ fun ConfigScreen(viewModel: MainViewModel) {
                 }
             }
 
-            // Card: PERIZINAN ANDROID (PERMISSIONS) (Screenshot 4)
+            // Card: PERIZINAN ANDROID (PERMISSIONS MANAGER)
             item {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
@@ -537,24 +522,132 @@ fun ConfigScreen(viewModel: MainViewModel) {
                 ) {
                     Column(
                         modifier = Modifier.padding(18.dp),
-                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                        verticalArrangement = Arrangement.spacedBy(14.dp)
                     ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Icon(Icons.Default.Security, contentDescription = null, tint = NeonCyan, modifier = Modifier.size(20.dp))
+                                Text(
+                                    text = "ANDROID PERMISSIONS MANAGER",
+                                    fontWeight = FontWeight.Bold,
+                                    color = NeonCyan,
+                                    fontSize = 13.sp
+                                )
+                            }
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = NeonCyan.copy(alpha = 0.15f),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, NeonCyan.copy(alpha = 0.4f))
+                            ) {
+                                Text(
+                                    text = "${selectedPermissions.size} Izin Aktif",
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                    fontSize = 11.sp,
+                                    color = NeonCyan,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+
                         Text(
-                            text = "PERIZINAN ANDROID (PERMISSIONS)",
-                            fontWeight = FontWeight.Bold,
-                            color = NeonCyan,
-                            fontSize = 13.sp
+                            text = "Konfigurasikan izin yang dicantumkan ke AndroidManifest.xml. Izin yang tidak dicentang akan otomatis difilter sehingga APK Anda bersih dan aman.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = TextGray,
+                            fontSize = 11.sp,
+                            lineHeight = 15.sp
                         )
 
-                        PermissionCheckboxRow("Internet", "Mengizinkan aplikasi memuat aset & API jaringan", permInternet) { permInternet = it }
-                        PermissionCheckboxRow("Media/Storage", "Membaca dan menyimpan berkas ke folder Download", permStorage) { permStorage = it }
-                        PermissionCheckboxRow("Download Manager", "Mengunduh file ke folder Download perangkat", permDownload) { permDownload = it }
-                        PermissionCheckboxRow("Clipboard API", "Membaca dan menyalin teks dari clipboard", permClipboard) { permClipboard = it }
-                        PermissionCheckboxRow("Kamera", "Mengizinkan akses getUserMedia() dan stream kamera", permCamera) { permCamera = it }
-                        PermissionCheckboxRow("Perekam Audio", "Mengizinkan perekaman suara / microphone", permAudio) { permAudio = it }
-                        PermissionCheckboxRow("Lokasi (GPS)", "Mengakses koordinat GPS dan jaringan", permLocation) { permLocation = it }
-                        PermissionCheckboxRow("Getaran (Haptic)", "Efek getar haptic pada sentuhan dan game", permVibrate) { permVibrate = it }
-                        PermissionCheckboxRow("Notifikasi", "Menampilkan status download & notifikasi sistem", permNotification) { permNotification = it }
+                        // Quick buttons
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            OutlinedButton(
+                                onClick = {
+                                    selectedPermissions = setOf("INTERNET", "ACCESS_NETWORK_STATE", "VIBRATE")
+                                },
+                                modifier = Modifier.weight(1f),
+                                shape = RoundedCornerShape(8.dp),
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp)
+                            ) {
+                                Text("Default Aman", fontSize = 11.sp, color = NeonCyan)
+                            }
+                            OutlinedButton(
+                                onClick = {
+                                    selectedPermissions = com.example.data.PermissionManager.DEFINITIONS.map { it.id }.toSet()
+                                },
+                                modifier = Modifier.weight(1f),
+                                shape = RoundedCornerShape(8.dp),
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp)
+                            ) {
+                                Text("Pilih Semua", fontSize = 11.sp, color = TextWhite)
+                            }
+                        }
+
+                        // Categories
+                        com.example.data.PermissionCategory.values().forEach { category ->
+                            val itemsInCategory = com.example.data.PermissionManager.DEFINITIONS.filter { it.category == category }
+                            if (itemsInCategory.isNotEmpty()) {
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    text = category.displayName.uppercase(),
+                                    fontWeight = FontWeight.Bold,
+                                    color = NeonCyan,
+                                    fontSize = 11.sp,
+                                    letterSpacing = 0.5.sp
+                                )
+                                itemsInCategory.forEach { def ->
+                                    val isChecked = selectedPermissions.contains(def.id)
+                                    PermissionItemRow(
+                                        definition = def,
+                                        checked = isChecked,
+                                        onCheckedChange = { checked ->
+                                            selectedPermissions = if (checked) {
+                                                selectedPermissions + def.id
+                                            } else {
+                                                selectedPermissions - def.id
+                                            }
+                                        }
+                                    )
+                                }
+                            }
+                        }
+
+                        // Clipboard Note
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = CyberSurfaceVariant,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                Icon(Icons.Default.ContentPaste, contentDescription = null, tint = NeonCyan, modifier = Modifier.size(20.dp))
+                                Column {
+                                    Text(
+                                        text = "Fitur Clipboard (Salin & Tempel)",
+                                        fontWeight = FontWeight.Bold,
+                                        color = TextWhite,
+                                        fontSize = 12.sp
+                                    )
+                                    Text(
+                                        text = "Tersedia secara native melalui ClipboardManager dan polyfill JavaScript otomatis tanpa memerlukan deklarasi izin khusus di AndroidManifest.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = TextGray,
+                                        fontSize = 11.sp
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -579,6 +672,90 @@ fun ConfigScreen(viewModel: MainViewModel) {
                 }
             }
         }
+    }
+}
+
+@Composable
+fun PermissionItemRow(
+    definition: com.example.data.PermissionDefinition,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .clickable { onCheckedChange(!checked) }
+            .padding(vertical = 6.dp, horizontal = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Column(modifier = Modifier.weight(1f).padding(end = 10.dp)) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Text(
+                    text = definition.title,
+                    fontWeight = FontWeight.Bold,
+                    color = TextWhite,
+                    fontSize = 13.sp
+                )
+                if (definition.isSpecialAccess) {
+                    Surface(
+                        shape = RoundedCornerShape(4.dp),
+                        color = androidx.compose.ui.graphics.Color(0xFFFF9100).copy(alpha = 0.2f)
+                    ) {
+                        Text(
+                            text = "Khusus",
+                            color = androidx.compose.ui.graphics.Color(0xFFFF9100),
+                            fontSize = 9.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+                        )
+                    }
+                } else if (definition.isRuntime) {
+                    Surface(
+                        shape = RoundedCornerShape(4.dp),
+                        color = NeonCyan.copy(alpha = 0.15f)
+                    ) {
+                        Text(
+                            text = "Runtime",
+                            color = NeonCyan,
+                            fontSize = 9.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+                        )
+                    }
+                }
+            }
+            Spacer(modifier = Modifier.height(2.dp))
+            Text(
+                text = definition.description,
+                style = MaterialTheme.typography.bodySmall,
+                color = TextGray,
+                fontSize = 11.sp,
+                lineHeight = 14.sp
+            )
+            if (definition.note != null) {
+                Text(
+                    text = "⚠ " + definition.note,
+                    color = androidx.compose.ui.graphics.Color(0xFFFFB74D),
+                    fontSize = 10.sp,
+                    lineHeight = 13.sp,
+                    modifier = Modifier.padding(top = 2.dp)
+                )
+            }
+        }
+        Checkbox(
+            checked = checked,
+            onCheckedChange = onCheckedChange,
+            colors = CheckboxDefaults.colors(
+                checkedColor = NeonCyan,
+                checkmarkColor = CyberBg,
+                uncheckedColor = TextGray
+            )
+        )
     }
 }
 

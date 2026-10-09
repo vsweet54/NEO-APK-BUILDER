@@ -414,6 +414,10 @@ class ProjectRepository(private val context: Context) {
     <p>Masukkan URL berkas media, video, atau dokumen untuk memulai unduhan langsung.</p>
     <div class="input-group">
       <input type="text" id="urlInput" placeholder="https://example.com/file.zip">
+      <div class="action-buttons">
+        <button type="button" class="btn-sub" onclick="pasteUrl()">📋 Tempel URL</button>
+        <button type="button" class="btn-sub" onclick="copyUrl()">📑 Salin URL</button>
+      </div>
     </div>
     <button class="btn" onclick="startDownload()">UNDUH SEKARANG</button>
   </div>
@@ -495,7 +499,28 @@ body {
   border-radius: 10px;
   color: #FFF;
   font-size: 14px;
+  margin-bottom: 10px;
+}
+.action-buttons {
+  display: flex;
+  gap: 8px;
   margin-bottom: 14px;
+}
+.btn-sub {
+  flex: 1;
+  padding: 8px 12px;
+  background: #111C2E;
+  color: #00E5FF;
+  border: 1px solid rgba(0, 229, 255, 0.3);
+  border-radius: 8px;
+  font-size: 12px;
+  cursor: pointer;
+  font-weight: 600;
+  transition: all 0.2s ease;
+}
+.btn-sub:active {
+  background: #1B2B44;
+  transform: scale(0.98);
 }
 .btn {
   width: 100%;
@@ -526,6 +551,60 @@ body {
 
         File(dir, "script.js").writeText(
             """
+function pasteUrl() {
+  if (navigator.clipboard && navigator.clipboard.readText) {
+    navigator.clipboard.readText().then(function(text) {
+      if (text) {
+        document.getElementById('urlInput').value = text;
+      } else {
+        fallbackPaste();
+      }
+    }).catch(function(err) {
+      fallbackPaste();
+    });
+  } else {
+    fallbackPaste();
+  }
+}
+
+function fallbackPaste() {
+  if (window.NeoAndroid && window.NeoAndroid.getFromClipboard) {
+    var text = window.NeoAndroid.getFromClipboard();
+    if (text) {
+      document.getElementById('urlInput').value = text;
+    } else {
+      alert('Papan klip sistem masih kosong.');
+    }
+  } else {
+    alert('Clipboard bridge tidak dapat diakses.');
+  }
+}
+
+function copyUrl() {
+  var url = document.getElementById('urlInput').value;
+  if (!url) {
+    alert('Kolom URL masih kosong.');
+    return;
+  }
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(url).then(function() {
+      alert('URL disalin ke papan klip!');
+    }).catch(function() {
+      fallbackCopy(url);
+    });
+  } else {
+    fallbackCopy(url);
+  }
+}
+
+function fallbackCopy(text) {
+  if (window.NeoAndroid && window.NeoAndroid.copyToClipboard) {
+    window.NeoAndroid.copyToClipboard(text);
+  } else {
+    alert('Gagal menyalin URL.');
+  }
+}
+
 function startDownload() {
   const url = document.getElementById('urlInput').value.trim();
   if (!url) {

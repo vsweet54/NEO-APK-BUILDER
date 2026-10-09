@@ -100,6 +100,7 @@ dependencies {
   implementation(libs.coil.compose)
   implementation(libs.bouncycastle.prov)
   implementation(libs.bouncycastle.pkix)
+  implementation(libs.apksig)
   implementation(libs.converter.moshi)
   implementation(libs.firebase.ai)
   // Uncomment to use Firestore:

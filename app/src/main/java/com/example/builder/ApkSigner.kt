@@ -1,6 +1,7 @@
 package com.example.builder
 
 import android.content.Context
+import com.android.apksig.ApkSigner as AndroidApkSigner
 import org.bouncycastle.asn1.x500.X500Name
 import org.bouncycastle.cert.jcajce.JcaX509CertificateHolder
 import org.bouncycastle.cert.jcajce.JcaX509v3CertificateBuilder
@@ -29,10 +30,61 @@ object ApkSigner {
     fun signApk(
         context: Context,
         inputEntries: Map<String, ByteArray>,
-        outputFile: File
+        outputFile: File,
+        minSdkVersion: Int = 21
     ) {
         val (privateKey, cert) = loadOrGenerateCredentials(context)
 
+        // 1. Write an unsigned intermediate ZIP file
+        val tempUnsigned = File(context.cacheDir, "temp_unsigned_${System.currentTimeMillis()}.apk")
+        outputFile.parentFile?.mkdirs()
+
+        try {
+            FileOutputStream(tempUnsigned).use { fos ->
+                ZipOutputStream(fos).use { zos ->
+                    for ((name, data) in inputEntries) {
+                        if (name.startsWith("META-INF/")) continue
+                        val entry = ZipEntry(name)
+                        zos.putNextEntry(entry)
+                        zos.write(data)
+                        zos.closeEntry()
+                    }
+                }
+            }
+
+            // 2. Sign using Android's official APK Signature Scheme v1, v2, and v3 with 4-byte zip alignment
+            val signerConfig = AndroidApkSigner.SignerConfig.Builder(
+                KEY_ALIAS,
+                privateKey,
+                listOf(cert)
+            ).build()
+
+            val apkSigner = AndroidApkSigner.Builder(listOf(signerConfig))
+                .setInputApk(tempUnsigned)
+                .setOutputApk(outputFile)
+                .setV1SigningEnabled(true)
+                .setV2SigningEnabled(true)
+                .setV3SigningEnabled(true)
+                .setMinSdkVersion(minSdkVersion)
+                .build()
+
+            apkSigner.sign()
+        } catch (e: Exception) {
+            // Fallback to legacy v1 signing if apksig encounters an environment exception
+            fallbackV1Sign(privateKey, cert, inputEntries, outputFile)
+        } finally {
+            if (tempUnsigned.exists()) {
+                tempUnsigned.delete()
+            }
+        }
+    }
+
+    private fun fallbackV1Sign(
+        privateKey: PrivateKey,
+        cert: X509Certificate,
+        inputEntries: Map<String, ByteArray>,
+        outputFile: File
+    ) {
         val md = MessageDigest.getInstance("SHA-256")
 
         // 1. Generate MANIFEST.MF

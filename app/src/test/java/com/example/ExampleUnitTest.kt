@@ -41,4 +41,26 @@ class ExampleUnitTest {
         val searchLabelStr = String(searchLabel, Charsets.ISO_8859_1)
         assertTrue("Modified AXML must contain NEO DOWNLOADER", modifiedStr.contains(searchLabelStr))
     }
+
+    @Test
+    fun testAxmlModifier_updatesTargetSdkAndVersionCode() {
+        val assetTemplate = File("src/main/assets/runner_template.apk")
+        var originalManifestBytes: ByteArray? = null
+        ZipFile(assetTemplate).use { zip ->
+            val entry = zip.getEntry("AndroidManifest.xml")
+            originalManifestBytes = zip.getInputStream(entry).readBytes()
+        }
+        assertNotNull(originalManifestBytes)
+
+        val modified = AxmlModifier.modifyManifest(
+            axmlBytes = originalManifestBytes!!,
+            replacements = mapOf("com.neo.template" to "com.test.app"),
+            versionCode = 5,
+            minSdkVersion = 24,
+            targetSdkVersion = 34
+        )
+
+        assertNotNull(modified)
+        assertTrue(modified.isNotEmpty())
+    }
 }

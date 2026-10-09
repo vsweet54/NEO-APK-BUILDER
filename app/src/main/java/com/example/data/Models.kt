@@ -24,7 +24,7 @@ data class Project(
     val buildType: String = "release",
     val nativeBridge: Boolean = true,
     val domStorage: Boolean = true,
-    val permissions: String = "INTERNET,MEDIA,DOWNLOAD,CLIPBOARD,CAMERA,AUDIO,LOCATION,VIBRATE,NOTIFICATION"
+    val permissions: String = "INTERNET,ACCESS_NETWORK_STATE,VIBRATE"
 )
 
 data class ProjectConfig(
@@ -40,7 +40,7 @@ data class ProjectConfig(
     val buildType: String = "release",
     val nativeBridge: Boolean = true,
     val domStorage: Boolean = true,
-    val permissions: String = "INTERNET,MEDIA,DOWNLOAD,CLIPBOARD,CAMERA,AUDIO,LOCATION,VIBRATE,NOTIFICATION"
+    val permissions: String = "INTERNET,ACCESS_NETWORK_STATE,VIBRATE"
 )
 
 @Entity(tableName = "build_history")
