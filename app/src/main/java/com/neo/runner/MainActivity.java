@@ -2,6 +2,7 @@ package com.neo.runner;
 
 import android.app.Activity;
 import android.app.DownloadManager;
+import android.app.PictureInPictureParams;
 import android.content.ActivityNotFoundException;
 import android.content.ClipData;
 import android.content.ClipboardManager;
@@ -12,7 +13,9 @@ import android.content.Intent;
 import android.content.pm.ActivityInfo;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
+import android.content.res.Configuration;
 import android.graphics.Color;
+import android.media.MediaScannerConnection;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -23,8 +26,10 @@ import android.os.VibrationEffect;
 import android.os.Vibrator;
 import android.os.VibratorManager;
 import android.provider.MediaStore;
+import android.provider.Settings;
 import android.util.Base64;
 import android.util.Log;
+import android.util.Rational;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.Window;
@@ -54,6 +59,8 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.TimeUnit;
 
@@ -71,11 +78,21 @@ public class MainActivity extends Activity {
 
     private String appName = "NEO App";
     private String packageName = "com.neo.app";
+    private boolean autoPipEnabled = false;
+
+    private final ExecutorService ioExecutor = Executors.newFixedThreadPool(4);
+    private final Handler mainHandler = new Handler(Looper.getMainLooper());
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         requestWindowFeature(Window.FEATURE_NO_TITLE);
+
+        // Hardware Acceleration to eliminate frame drops and tearing
+        getWindow().setFlags(
+            WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
+            WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED
+        );
 
         applyAppConfig();
         configureWebView();
@@ -117,6 +134,13 @@ public class MainActivity extends Activity {
         webView = new WebView(this);
         webView.setBackgroundColor(Color.parseColor("#060D17"));
 
+        // Hardware acceleration is handled directly at the Window level.
+        // LAYER_TYPE_NONE ensures direct GPU compositing without allocating redundant offscreen buffers,
+        // eliminating frame drops, tearing, and stuttering during animations, 60fps/120fps scrolling, and Canvas rendering.
+        webView.setLayerType(View.LAYER_TYPE_NONE, null);
+        webView.setScrollBarStyle(View.SCROLLBARS_INSIDE_OVERLAY);
+        webView.setOverScrollMode(View.OVER_SCROLL_IF_CONTENT_SCROLLS);
+
         FrameLayout layout = new FrameLayout(this);
         layout.setLayoutParams(new ViewGroup.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
@@ -139,6 +163,17 @@ public class MainActivity extends Activity {
         s.setUseWideViewPort(true);
         s.setLoadWithOverviewMode(true);
         s.setMediaPlaybackRequiresUserGesture(false);
+        s.setCacheMode(WebSettings.LOAD_DEFAULT);
+        s.setLayoutAlgorithm(WebSettings.LayoutAlgorithm.NORMAL);
+        s.setRenderPriority(WebSettings.RenderPriority.HIGH);
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            s.setSafeBrowsingEnabled(false);
+        }
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            s.setOffscreenPreRaster(true);
+        }
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             s.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
@@ -211,11 +246,271 @@ public class MainActivity extends Activity {
                p.contains("CALENDAR") || p.contains("POST_NOTIFICATIONS") || p.contains("BLUETOOTH");
     }
 
+    // ==================== CONTENT & MAGIC BYTE VALIDATOR ====================
+
+    public static class FileFormatInfo {
+        public final String extension;
+        public final String mimeType;
+
+        public FileFormatInfo(String extension, String mimeType) {
+            this.extension = extension;
+            this.mimeType = mimeType;
+        }
+    }
+
+    private static boolean containsAsciiSequence(byte[] data, String pattern) {
+        if (data == null || pattern == null || pattern.isEmpty()) return false;
+        byte[] p = pattern.getBytes(StandardCharsets.US_ASCII);
+        int maxScan = Math.min(data.length, 65536);
+        for (int i = 0; i <= maxScan - p.length; i++) {
+            boolean match = true;
+            for (int j = 0; j < p.length; j++) {
+                if (data[i + j] != p[j]) {
+                    match = false;
+                    break;
+                }
+            }
+            if (match) return true;
+        }
+        return false;
+    }
+
+    /**
+     * Inspects binary content magic numbers (signatures) to ensure downloaded files
+     * receive their true, genuine file format and extension rather than a blind .bin fallback.
+     */
+    public static FileFormatInfo inspectMagicBytes(byte[] bytes, String rawName, String passedMime) {
+        if (bytes == null || bytes.length == 0) {
+            return new FileFormatInfo(".bin", "application/octet-stream");
+        }
+
+        int len = bytes.length;
+        String lowerName = (rawName != null) ? rawName.toLowerCase() : "";
+
+        // 1. PNG: 89 50 4E 47 0D 0A 1A 0A
+        if (len >= 8 && (bytes[0] & 0xFF) == 0x89 && bytes[1] == 0x50 && bytes[2] == 0x4E &&
+                bytes[3] == 0x47 && bytes[4] == 0x0D && bytes[5] == 0x0A && bytes[6] == 0x1A && bytes[7] == 0x0A) {
+            return new FileFormatInfo(".png", "image/png");
+        }
+
+        // 2. JPEG: FF D8 FF
+        if (len >= 3 && (bytes[0] & 0xFF) == 0xFF && (bytes[1] & 0xFF) == 0xD8 && (bytes[2] & 0xFF) == 0xFF) {
+            return new FileFormatInfo(".jpg", "image/jpeg");
+        }
+
+        // 3. GIF: GIF87a or GIF89a
+        if (len >= 6 && bytes[0] == 'G' && bytes[1] == 'I' && bytes[2] == 'F' && bytes[3] == '8') {
+            return new FileFormatInfo(".gif", "image/gif");
+        }
+
+        // 4. WEBP: RIFF....WEBP
+        if (len >= 12 && bytes[0] == 'R' && bytes[1] == 'I' && bytes[2] == 'F' && bytes[3] == 'F' &&
+                bytes[8] == 'W' && bytes[9] == 'E' && bytes[10] == 'B' && bytes[11] == 'P') {
+            return new FileFormatInfo(".webp", "image/webp");
+        }
+
+        // 5. BMP: BM
+        if (len >= 2 && bytes[0] == 'B' && bytes[1] == 'M') {
+            return new FileFormatInfo(".bmp", "image/bmp");
+        }
+
+        // 6. PDF: %PDF-
+        if (len >= 4 && bytes[0] == '%' && bytes[1] == 'P' && bytes[2] == 'D' && bytes[3] == 'F') {
+            return new FileFormatInfo(".pdf", "application/pdf");
+        }
+
+        // 7. ZIP / APK / JAR / DOCX / XLSX / EPUB: PK\x03\x04, PK\x05\x06, PK\x07\x08
+        if (len >= 4 && bytes[0] == 'P' && bytes[1] == 'K' &&
+                (bytes[2] == 0x03 || bytes[2] == 0x05 || bytes[2] == 0x07) &&
+                (bytes[3] == 0x04 || bytes[3] == 0x06 || bytes[3] == 0x08)) {
+
+            // Deep check: Android APK contains AndroidManifest.xml
+            if (containsAsciiSequence(bytes, "AndroidManifest.xml") ||
+                    lowerName.endsWith(".apk") ||
+                    (passedMime != null && passedMime.contains("android.package-archive"))) {
+                return new FileFormatInfo(".apk", "application/vnd.android.package-archive");
+            }
+            if (lowerName.endsWith(".epub") || (passedMime != null && passedMime.contains("epub"))) {
+                return new FileFormatInfo(".epub", "application/epub+zip");
+            }
+            if (lowerName.endsWith(".docx") || (containsAsciiSequence(bytes, "[Content_Types].xml") && containsAsciiSequence(bytes, "word/"))) {
+                return new FileFormatInfo(".docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
+            }
+            if (lowerName.endsWith(".xlsx") || (containsAsciiSequence(bytes, "[Content_Types].xml") && containsAsciiSequence(bytes, "xl/"))) {
+                return new FileFormatInfo(".xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+            }
+            return new FileFormatInfo(".zip", "application/zip");
+        }
+
+        // 8. 7Z: 37 7A BC AF 27 1C
+        if (len >= 6 && (bytes[0] & 0xFF) == 0x37 && (bytes[1] & 0xFF) == 0x7A && (bytes[2] & 0xFF) == 0xBC &&
+                (bytes[3] & 0xFF) == 0xAF && (bytes[4] & 0xFF) == 0x27 && (bytes[5] & 0xFF) == 0x1C) {
+            return new FileFormatInfo(".7z", "application/x-7z-compressed");
+        }
+
+        // 9. RAR: Rar!
+        if (len >= 4 && bytes[0] == 'R' && bytes[1] == 'a' && bytes[2] == 'r' && bytes[3] == '!') {
+            return new FileFormatInfo(".rar", "application/vnd.rar");
+        }
+
+        // 10. GZIP: 1F 8B
+        if (len >= 2 && (bytes[0] & 0xFF) == 0x1F && (bytes[1] & 0xFF) == 0x8B) {
+            return new FileFormatInfo(".gz", "application/gzip");
+        }
+
+        // 11. MP3: ID3 or sync frame FF FB / FF F3 / FF F2
+        if ((len >= 3 && bytes[0] == 'I' && bytes[1] == 'D' && bytes[2] == '3') ||
+                (len >= 2 && (bytes[0] & 0xFF) == 0xFF && ((bytes[1] & 0xFF) & 0xE0) == 0xE0)) {
+            return new FileFormatInfo(".mp3", "audio/mpeg");
+        }
+
+        // 12. MP4 / M4A: ftyp at offset 4
+        if (len >= 8 && bytes[4] == 'f' && bytes[5] == 't' && bytes[6] == 'y' && bytes[7] == 'p') {
+            return new FileFormatInfo(".mp4", "video/mp4");
+        }
+
+        // 13. OGG: OggS
+        if (len >= 4 && bytes[0] == 'O' && bytes[1] == 'g' && bytes[2] == 'g' && bytes[3] == 'S') {
+            return new FileFormatInfo(".ogg", "audio/ogg");
+        }
+
+        // 14. WAV: RIFF....WAVE
+        if (len >= 12 && bytes[0] == 'R' && bytes[1] == 'I' && bytes[2] == 'F' && bytes[3] == 'F' &&
+                bytes[8] == 'W' && bytes[9] == 'A' && bytes[10] == 'V' && bytes[11] == 'E') {
+            return new FileFormatInfo(".wav", "audio/wav");
+        }
+
+        // 15. FLAC: fLaC
+        if (len >= 4 && bytes[0] == 'f' && bytes[1] == 'L' && bytes[2] == 'a' && bytes[3] == 'C') {
+            return new FileFormatInfo(".flac", "audio/flac");
+        }
+
+        // 16. WebM / Matroska: 1A 45 DF A3
+        if (len >= 4 && (bytes[0] & 0xFF) == 0x1A && (bytes[1] & 0xFF) == 0x45 &&
+                (bytes[2] & 0xFF) == 0xDF && (bytes[3] & 0xFF) == 0xA3) {
+            if (passedMime != null && passedMime.contains("audio")) {
+                return new FileFormatInfo(".weba", "audio/webm");
+            }
+            return new FileFormatInfo(".webm", "video/webm");
+        }
+
+        // 17. Text-based detection: SVG, HTML, JSON, CSV, CSS, JS, TXT
+        String textSnippet = "";
+        try {
+            int scanLen = Math.min(len, 1024);
+            textSnippet = new String(bytes, 0, scanLen, StandardCharsets.UTF_8).trim();
+        } catch (Throwable ignored) {}
+
+        if (!textSnippet.isEmpty()) {
+            String lowerSnippet = textSnippet.toLowerCase();
+            if (lowerSnippet.startsWith("<svg") || (lowerSnippet.startsWith("<?xml") && lowerSnippet.contains("<svg"))) {
+                return new FileFormatInfo(".svg", "image/svg+xml");
+            }
+            if (lowerSnippet.startsWith("<!doctype html") || lowerSnippet.startsWith("<html")) {
+                return new FileFormatInfo(".html", "text/html");
+            }
+            if ((textSnippet.startsWith("{") && textSnippet.endsWith("}")) || (textSnippet.startsWith("[") && textSnippet.endsWith("]"))) {
+                return new FileFormatInfo(".json", "application/json");
+            }
+            if (lowerName.endsWith(".css")) {
+                return new FileFormatInfo(".css", "text/css");
+            }
+            if (lowerName.endsWith(".csv")) {
+                return new FileFormatInfo(".csv", "text/csv");
+            }
+            if (lowerName.endsWith(".js")) {
+                return new FileFormatInfo(".js", "application/javascript");
+            }
+
+            // Check if mostly printable characters
+            boolean printable = true;
+            for (int i = 0; i < Math.min(len, 256); i++) {
+                int b = bytes[i] & 0xFF;
+                if (b < 0x09 || (b > 0x0D && b < 0x20 && b != 0x1B)) {
+                    printable = false;
+                    break;
+                }
+            }
+            if (printable) {
+                return new FileFormatInfo(".txt", "text/plain");
+            }
+        }
+
+        // 18. Fallback to MIME type mapping
+        if (passedMime != null && !passedMime.trim().isEmpty() && !passedMime.equalsIgnoreCase("application/octet-stream")) {
+            String m = passedMime.toLowerCase().trim();
+            if (m.contains("image/png")) return new FileFormatInfo(".png", "image/png");
+            if (m.contains("image/jpeg") || m.contains("image/jpg")) return new FileFormatInfo(".jpg", "image/jpeg");
+            if (m.contains("image/webp")) return new FileFormatInfo(".webp", "image/webp");
+            if (m.contains("image/gif")) return new FileFormatInfo(".gif", "image/gif");
+            if (m.contains("image/svg")) return new FileFormatInfo(".svg", "image/svg+xml");
+            if (m.contains("application/pdf")) return new FileFormatInfo(".pdf", "application/pdf");
+            if (m.contains("application/zip")) return new FileFormatInfo(".zip", "application/zip");
+            if (m.contains("android.package-archive")) return new FileFormatInfo(".apk", "application/vnd.android.package-archive");
+            if (m.contains("text/plain")) return new FileFormatInfo(".txt", "text/plain");
+            if (m.contains("text/html")) return new FileFormatInfo(".html", "text/html");
+            if (m.contains("text/css")) return new FileFormatInfo(".css", "text/css");
+            if (m.contains("json")) return new FileFormatInfo(".json", "application/json");
+            if (m.contains("audio/mpeg") || m.contains("audio/mp3")) return new FileFormatInfo(".mp3", "audio/mpeg");
+            if (m.contains("video/mp4")) return new FileFormatInfo(".mp4", "video/mp4");
+            if (m.contains("audio/ogg") || m.contains("video/ogg")) return new FileFormatInfo(".ogg", "audio/ogg");
+            if (m.contains("audio/wav")) return new FileFormatInfo(".wav", "audio/wav");
+            if (m.contains("video/webm")) return new FileFormatInfo(".webm", "video/webm");
+        }
+
+        return new FileFormatInfo(".bin", "application/octet-stream");
+    }
+
+    /**
+     * Resolves the true, genuine filename by combining the user/bridge requested name,
+     * the detected magic bytes, and the verified MIME type. Never forces .bin when content is known.
+     */
+    public static String resolveGenuineFileName(byte[] bytes, String rawName, String passedMime) {
+        FileFormatInfo info = inspectMagicBytes(bytes, rawName, passedMime);
+
+        String clean = (rawName != null) ? rawName.trim().replaceAll("[/\\\\:*?\"<>|]", "_") : "";
+
+        // Remove any generic downloadfile or UUID names
+        if (clean.isEmpty() || clean.equalsIgnoreCase("downloadfile") || clean.equalsIgnoreCase("downloadfile.bin") ||
+                clean.matches("^[0-9a-fA-F\\-]{36}(\\.bin)?$")) {
+            return "download_" + System.currentTimeMillis() + info.extension;
+        }
+
+        // If the name ended with .bin, replace it with genuine detected extension if known
+        if (clean.toLowerCase().endsWith(".bin")) {
+            if (!info.extension.equalsIgnoreCase(".bin")) {
+                return clean.substring(0, clean.length() - 4) + info.extension;
+            }
+            return clean;
+        }
+
+        // If the name lacks an extension, append genuine detected extension
+        if (!clean.contains(".")) {
+            return clean + info.extension;
+        }
+
+        // Check if current extension matches content, or if it should be corrected
+        int dot = clean.lastIndexOf('.');
+        String currentExt = (dot != -1) ? clean.substring(dot).toLowerCase() : "";
+        if (!currentExt.isEmpty() && !info.extension.equalsIgnoreCase(".bin")) {
+            // Harmonize obviously mismatched extensions
+            if ((currentExt.equals(".txt") || currentExt.equals(".bin")) &&
+                    (info.extension.equals(".png") || info.extension.equals(".jpg") || info.extension.equals(".pdf") ||
+                     info.extension.equals(".apk") || info.extension.equals(".zip") || info.extension.equals(".mp4"))) {
+                return clean.substring(0, dot) + info.extension;
+            }
+        }
+
+        return clean;
+    }
+
     public boolean saveBytesToDownloads(byte[] bytes, String fileName, String mimeType) {
         if (bytes == null || bytes.length == 0) return false;
-        String safeName = (fileName == null || fileName.trim().isEmpty()) ?
-                ("download_" + System.currentTimeMillis() + ".bin") : fileName;
-        String effMime = (mimeType == null || mimeType.trim().isEmpty()) ? "application/octet-stream" : mimeType;
+
+        // Perform strict content-based format validation
+        FileFormatInfo formatInfo = inspectMagicBytes(bytes, fileName, mimeType);
+        final String safeName = resolveGenuineFileName(bytes, fileName, mimeType);
+        final String effMime = formatInfo.mimeType;
 
         // 1. Android 10+ (API 29+) MediaStore scoped storage (zero permission requirement for Downloads)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -237,6 +532,9 @@ public class MainActivity extends Activity {
                     values.clear();
                     values.put(MediaStore.Downloads.IS_PENDING, 0);
                     resolver.update(uri, values, null, null);
+
+                    // Scan file so it is immediately discoverable
+                    notifyMediaScanner(safeName);
                     return true;
                 }
             } catch (Throwable t) {
@@ -253,6 +551,7 @@ public class MainActivity extends Activity {
                 fos.write(bytes);
                 fos.flush();
             }
+            notifyMediaScanner(file.getAbsolutePath());
             return true;
         } catch (Throwable t) {
             Log.e(TAG, "External public save failed: " + t.getMessage());
@@ -267,6 +566,7 @@ public class MainActivity extends Activity {
                 fos.write(bytes);
                 fos.flush();
             }
+            notifyMediaScanner(file.getAbsolutePath());
             return true;
         } catch (Throwable t) {
             Log.e(TAG, "App-specific save failed: " + t.getMessage());
@@ -274,110 +574,176 @@ public class MainActivity extends Activity {
         }
     }
 
+    private void notifyMediaScanner(String pathOrName) {
+        try {
+            MediaScannerConnection.scanFile(this, new String[]{pathOrName}, null, null);
+        } catch (Throwable ignored) {}
+    }
+
     private String guessFileNameFromDispositionOrMime(String url, String contentDisposition, String mimeType) {
+        // If contentDisposition is a direct, clean filename (e.g. from <a download="foo.png">)
+        if (contentDisposition != null && !contentDisposition.trim().isEmpty()) {
+            String trimmed = contentDisposition.trim();
+            if (!trimmed.toLowerCase().contains("attachment") && !trimmed.contains(";")) {
+                String sanitized = trimmed.replaceAll("[/\\\\:*?\"<>|]", "_");
+                if (sanitized.contains(".") && !sanitized.endsWith(".bin")) {
+                    return sanitized;
+                }
+            }
+            if (trimmed.contains("filename=")) {
+                try {
+                    String sub = trimmed.substring(trimmed.indexOf("filename=") + 9);
+                    if (sub.startsWith("\"") && sub.indexOf("\"", 1) != -1) {
+                        return sub.substring(1, sub.indexOf("\"", 1));
+                    }
+                    int end = sub.indexOf(";");
+                    return (end != -1 ? sub.substring(0, end) : sub).trim();
+                } catch (Throwable ignored) {}
+            }
+        }
+
+        // For blob and data URLs, check if mimeType has valid mapped extension
+        if (url != null && (url.startsWith("blob:") || url.startsWith("data:"))) {
+            String ext = "";
+            if (mimeType != null) {
+                String m = mimeType.toLowerCase();
+                if (m.contains("image/png")) ext = ".png";
+                else if (m.contains("image/jpeg") || m.contains("image/jpg")) ext = ".jpg";
+                else if (m.contains("image/webp")) ext = ".webp";
+                else if (m.contains("image/svg")) ext = ".svg";
+                else if (m.contains("application/pdf")) ext = ".pdf";
+                else if (m.contains("application/zip")) ext = ".zip";
+                else if (m.contains("android.package-archive")) ext = ".apk";
+                else if (m.contains("text/plain")) ext = ".txt";
+                else if (m.contains("text/html")) ext = ".html";
+                else if (m.contains("text/css")) ext = ".css";
+                else if (m.contains("json")) ext = ".json";
+                else if (m.contains("audio/mpeg") || m.contains("audio/mp3")) ext = ".mp3";
+                else if (m.contains("video/mp4")) ext = ".mp4";
+            }
+            if (!ext.isEmpty()) {
+                return "download_" + System.currentTimeMillis() + ext;
+            }
+            return ""; // Allow saveFile to resolve based on decoded bytes
+        }
+
         String guessed = null;
         try {
             guessed = URLUtil.guessFileName(url, contentDisposition, mimeType);
         } catch (Throwable ignored) {}
-        if (guessed != null && !guessed.trim().isEmpty() && !guessed.equalsIgnoreCase("downloadfile")) {
+        if (guessed != null && !guessed.trim().isEmpty() && !guessed.equalsIgnoreCase("downloadfile") &&
+                !guessed.equalsIgnoreCase("downloadfile.bin")) {
             return guessed;
         }
-        if (contentDisposition != null && contentDisposition.contains("filename=")) {
-            try {
-                String sub = contentDisposition.substring(contentDisposition.indexOf("filename=") + 9);
-                if (sub.startsWith("\"") && sub.indexOf("\"", 1) != -1) {
-                    return sub.substring(1, sub.indexOf("\"", 1));
-                }
-                int end = sub.indexOf(";");
-                return (end != -1 ? sub.substring(0, end) : sub).trim();
-            } catch (Throwable ignored) {}
-        }
-        String ext = ".bin";
-        if (mimeType != null) {
-            String m = mimeType.toLowerCase();
-            if (m.contains("image/png")) ext = ".png";
-            else if (m.contains("image/jpeg") || m.contains("image/jpg")) ext = ".jpg";
-            else if (m.contains("image/webp")) ext = ".webp";
-            else if (m.contains("image/svg")) ext = ".svg";
-            else if (m.contains("application/pdf")) ext = ".pdf";
-            else if (m.contains("application/zip")) ext = ".zip";
-            else if (m.contains("application/vnd.android.package-archive")) ext = ".apk";
-            else if (m.contains("text/plain")) ext = ".txt";
-            else if (m.contains("text/html")) ext = ".html";
-            else if (m.contains("text/css")) ext = ".css";
-            else if (m.contains("javascript") || m.contains("json")) ext = ".json";
-            else if (m.contains("audio/mpeg") || m.contains("audio/mp3")) ext = ".mp3";
-            else if (m.contains("video/mp4")) ext = ".mp4";
-        }
-        return "download_" + System.currentTimeMillis() + ext;
+
+        return "download_" + System.currentTimeMillis() + ".bin";
     }
 
     public void handleDownload(final String url, final String contentDisposition, final String mimeType, final String userAgent) {
         if (url == null || url.trim().isEmpty()) return;
 
-        // 1. BLOB URL: Must be converted to base64 inside WebView JavaScript context
+        // 1. BLOB URL: Fetched via WebView JS context to obtain genuine Blob data & MIME type
         if (url.startsWith("blob:")) {
-            final String safeName = guessFileNameFromDispositionOrMime(url, contentDisposition, mimeType);
+            final String safeName = (contentDisposition != null && !contentDisposition.trim().isEmpty() && !contentDisposition.toLowerCase().endsWith(".bin")) ?
+                    guessFileNameFromDispositionOrMime(url, contentDisposition, mimeType) : "";
             String js = "javascript:(function(){" +
                     "try {" +
-                    "  var xhr = new XMLHttpRequest();" +
-                    "  xhr.open('GET', '" + url.replace("'", "\\'") + "', true);" +
-                    "  xhr.responseType = 'blob';" +
-                    "  xhr.onload = function() {" +
-                    "    if (this.status === 200 || this.status === 0) {" +
-                    "      var b = this.response;" +
-                    "      var r = new FileReader();" +
-                    "      r.onloadend = function() {" +
-                    "        var bridge = window.AndroidBridge || window.NeoAndroid;" +
-                    "        if (bridge && typeof bridge.saveFile === 'function') {" +
-                    "          bridge.saveFile(r.result, '" + safeName.replace("'", "\\'") + "', '" + (mimeType != null ? mimeType.replace("'", "\\'") : "application/octet-stream") + "');" +
-                    "        }" +
-                    "      };" +
-                    "      r.readAsDataURL(b);" +
-                    "    }" +
+                    "  var targetUrl = '" + url.replace("'", "\\'") + "';" +
+                    "  var regEntry = (window._neoBlobRegistry && window._neoBlobRegistry.get(targetUrl)) || null;" +
+                    "  var suggestedName = '" + safeName.replace("'", "\\'") + "';" +
+                    "  if (!suggestedName && regEntry && regEntry.name) suggestedName = regEntry.name;" +
+                    "  var doSave = function(b, sName) {" +
+                    "    var r = new FileReader();" +
+                    "    r.onloadend = function(){" +
+                    "      var bridge = window.AndroidBridge || window.NeoAndroid;" +
+                    "      if (bridge && typeof bridge.saveFile === 'function') {" +
+                    "        var m = b.type || '" + (mimeType != null ? mimeType.replace("'", "\\'") : "application/octet-stream") + "';" +
+                    "        bridge.saveFile(r.result, sName, m);" +
+                    "      }" +
+                    "    };" +
+                    "    r.readAsDataURL(b);" +
                     "  };" +
-                    "  xhr.onerror = function() {" +
-                    "    var bridge = window.AndroidBridge || window.NeoAndroid;" +
-                    "    if (bridge && typeof bridge.showToast === 'function') bridge.showToast('Gagal memproses berkas blob');" +
-                    "  };" +
-                    "  xhr.send();" +
-                    "} catch (e) {" +
+                    "  if (regEntry && regEntry.blob) {" +
+                    "    doSave(regEntry.blob, suggestedName);" +
+                    "    return;" +
+                    "  }" +
+                    "  fetch(targetUrl)" +
+                    "  .then(function(res){ return res.blob(); })" +
+                    "  .then(function(b){ doSave(b, suggestedName); })" +
+                    "  .catch(function(err){" +
+                    "    var xhr = new XMLHttpRequest();" +
+                    "    xhr.open('GET', targetUrl, true);" +
+                    "    xhr.responseType = 'blob';" +
+                    "    xhr.onload = function(){" +
+                    "      if(this.status === 200 || this.status === 0){" +
+                    "        doSave(this.response, suggestedName);" +
+                    "      }" +
+                    "    };" +
+                    "    xhr.onerror = function(){" +
+                    "      var bridge = window.AndroidBridge || window.NeoAndroid;" +
+                    "      if(bridge && typeof bridge.showToast === 'function') bridge.showToast('Gagal memproses berkas blob');" +
+                    "    };" +
+                    "    xhr.send();" +
+                    "  });" +
+                    "} catch(e) {" +
                     "  var bridge = window.AndroidBridge || window.NeoAndroid;" +
-                    "  if (bridge && typeof bridge.showToast === 'function') bridge.showToast('Error unduh blob: ' + e.message);" +
+                    "  if(bridge && typeof bridge.showToast === 'function') bridge.showToast('Error unduh blob: ' + e.message);" +
                     "}" +
                     "})();";
             webView.evaluateJavascript(js, null);
             return;
         }
 
-        // 2. DATA URL: Parse base64/plain content and write directly to Downloads
+        // 2. DATA URL: Parse base64/plain content and write to Downloads on background executor
         if (url.startsWith("data:")) {
-            try {
-                final String safeName = guessFileNameFromDispositionOrMime(url, contentDisposition, mimeType);
-                int commaIdx = url.indexOf(",");
-                if (commaIdx != -1) {
-                    String header = url.substring(0, commaIdx);
-                    String dataPart = url.substring(commaIdx + 1);
-                    byte[] bytes;
-                    if (header.contains(";base64")) {
-                        bytes = Base64.decode(dataPart, Base64.DEFAULT);
-                    } else {
-                        bytes = Uri.decode(dataPart).getBytes(StandardCharsets.UTF_8);
-                    }
-                    boolean saved = saveBytesToDownloads(bytes, safeName, mimeType);
-                    if (saved) {
-                        Toast.makeText(this, "Berkas disimpan di Downloads: " + safeName, Toast.LENGTH_LONG).show();
-                    } else {
-                        Toast.makeText(this, "Gagal menyimpan berkas di penyimpanan", Toast.LENGTH_SHORT).show();
+            ioExecutor.execute(new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        int commaIdx = url.indexOf(",");
+                        if (commaIdx != -1) {
+                            String header = url.substring(0, commaIdx);
+                            String dataPart = url.substring(commaIdx + 1);
+
+                            String extractedMime = mimeType;
+                            if (header.contains(":") && header.contains(";")) {
+                                extractedMime = header.substring(5, header.indexOf(";"));
+                            }
+
+                            byte[] bytes;
+                            if (header.contains(";base64")) {
+                                bytes = Base64.decode(dataPart, Base64.DEFAULT);
+                            } else {
+                                bytes = Uri.decode(dataPart).getBytes(StandardCharsets.UTF_8);
+                            }
+
+                            final String finalName = resolveGenuineFileName(bytes, contentDisposition, extractedMime);
+                            final boolean saved = saveBytesToDownloads(bytes, finalName, extractedMime);
+                            mainHandler.post(new Runnable() {
+                                @Override
+                                public void run() {
+                                    if (saved) {
+                                        Toast.makeText(MainActivity.this, "Berkas disimpan di Downloads: " + finalName, Toast.LENGTH_LONG).show();
+                                    } else {
+                                        Toast.makeText(MainActivity.this, "Gagal menyimpan berkas di penyimpanan", Toast.LENGTH_SHORT).show();
+                                    }
+                                }
+                            });
+                        }
+                    } catch (final Throwable t) {
+                        mainHandler.post(new Runnable() {
+                            @Override
+                            public void run() {
+                                Toast.makeText(MainActivity.this, "Gagal mengunduh berkas data: " + t.getMessage(), Toast.LENGTH_SHORT).show();
+                            }
+                        });
                     }
                 }
-            } catch (Throwable t) {
-                Toast.makeText(this, "Gagal mengunduh berkas data: " + t.getMessage(), Toast.LENGTH_SHORT).show();
-            }
+            });
             return;
         }
 
-        // 3. HTTP / HTTPS: Use DownloadManager (native background system download with notification)
+        // 3. HTTP / HTTPS: Use DownloadManager or background stream with content validation
         if (url.startsWith("http://") || url.startsWith("https://")) {
             try {
                 DownloadManager dm = (DownloadManager) getSystemService(Context.DOWNLOAD_SERVICE);
@@ -407,37 +773,49 @@ public class MainActivity extends Activity {
                 Log.w(TAG, "DownloadManager error, using background stream: " + dmEx.getMessage());
             }
 
-            // Fallback: Background HTTP thread
+            // Fallback: Background HTTP executor
             startBackgroundDownload(url, contentDisposition, mimeType, userAgent);
             return;
         }
 
         // 4. CONTENT / FILE URIs
         if (url.startsWith("content://") || url.startsWith("file://")) {
-            try {
-                Uri uri = Uri.parse(url);
-                String safeName = guessFileNameFromDispositionOrMime(url, contentDisposition, mimeType);
-                try (InputStream is = getContentResolver().openInputStream(uri)) {
-                    if (is != null) {
-                        ByteArrayOutputStream baos = new ByteArrayOutputStream();
-                        byte[] buf = new byte[8192];
-                        int r;
-                        while ((r = is.read(buf)) != -1) {
-                            baos.write(buf, 0, r);
+            ioExecutor.execute(new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        Uri uri = Uri.parse(url);
+                        try (InputStream is = getContentResolver().openInputStream(uri)) {
+                            if (is != null) {
+                                ByteArrayOutputStream baos = new ByteArrayOutputStream();
+                                byte[] buf = new byte[8192];
+                                int r;
+                                while ((r = is.read(buf)) != -1) {
+                                    baos.write(buf, 0, r);
+                                }
+                                byte[] bytes = baos.toByteArray();
+                                final String finalName = resolveGenuineFileName(bytes, contentDisposition, mimeType);
+                                final boolean saved = saveBytesToDownloads(bytes, finalName, mimeType);
+                                mainHandler.post(new Runnable() {
+                                    @Override
+                                    public void run() {
+                                        if (saved) {
+                                            Toast.makeText(MainActivity.this, "Berkas disimpan di Downloads: " + finalName, Toast.LENGTH_LONG).show();
+                                        }
+                                    }
+                                });
+                                return;
+                            }
                         }
-                        boolean saved = saveBytesToDownloads(baos.toByteArray(), safeName, mimeType);
-                        if (saved) {
-                            Toast.makeText(this, "Berkas disimpan di Downloads: " + safeName, Toast.LENGTH_LONG).show();
-                            return;
-                        }
+                    } catch (Throwable t) {
+                        Log.e(TAG, "Content/File stream error: " + t.getMessage());
                     }
                 }
-            } catch (Throwable t) {
-                Log.e(TAG, "Content/File stream error: " + t.getMessage());
-            }
+            });
+            return;
         }
 
-        // 5. External Intent Fallback with strict ActivityNotFoundException protection
+        // 5. External Intent Fallback
         try {
             Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
@@ -450,7 +828,7 @@ public class MainActivity extends Activity {
     }
 
     private void startBackgroundDownload(final String urlStr, final String contentDisposition, final String mimeType, final String userAgent) {
-        new Thread(new Runnable() {
+        ioExecutor.execute(new Runnable() {
             @Override
             public void run() {
                 try {
@@ -474,7 +852,6 @@ public class MainActivity extends Activity {
                         if (disp == null) disp = contentDisposition;
                         String ct = conn.getContentType();
                         if (ct == null) ct = mimeType;
-                        final String fileName = guessFileNameFromDispositionOrMime(urlStr, disp, ct);
 
                         try (InputStream is = conn.getInputStream();
                              ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
@@ -483,20 +860,22 @@ public class MainActivity extends Activity {
                             while ((r = is.read(buf)) != -1) {
                                 baos.write(buf, 0, r);
                             }
-                            final boolean ok = saveBytesToDownloads(baos.toByteArray(), fileName, ct);
-                            runOnUiThread(new Runnable() {
+                            byte[] bytes = baos.toByteArray();
+                            final String resolvedName = resolveGenuineFileName(bytes, disp, ct);
+                            final boolean ok = saveBytesToDownloads(bytes, resolvedName, ct);
+                            mainHandler.post(new Runnable() {
                                 @Override
                                 public void run() {
                                     if (ok) {
-                                        Toast.makeText(MainActivity.this, "Berkas disimpan di Downloads: " + fileName, Toast.LENGTH_LONG).show();
+                                        Toast.makeText(MainActivity.this, "Berkas disimpan di Downloads: " + resolvedName, Toast.LENGTH_LONG).show();
                                     } else {
-                                        Toast.makeText(MainActivity.this, "Gagal menyimpan berkas: " + fileName, Toast.LENGTH_SHORT).show();
+                                        Toast.makeText(MainActivity.this, "Gagal menyimpan berkas: " + resolvedName, Toast.LENGTH_SHORT).show();
                                     }
                                 }
                             });
                         }
                     } else {
-                        runOnUiThread(new Runnable() {
+                        mainHandler.post(new Runnable() {
                             @Override
                             public void run() {
                                 safeOpenExternalUrl(urlStr);
@@ -504,7 +883,7 @@ public class MainActivity extends Activity {
                         });
                     }
                 } catch (Throwable t) {
-                    runOnUiThread(new Runnable() {
+                    mainHandler.post(new Runnable() {
                         @Override
                         public void run() {
                             safeOpenExternalUrl(urlStr);
@@ -512,7 +891,7 @@ public class MainActivity extends Activity {
                     });
                 }
             }
-        }).start();
+        });
     }
 
     private void safeOpenExternalUrl(String url) {
@@ -524,6 +903,52 @@ public class MainActivity extends Activity {
             Toast.makeText(this, "Tidak ada browser untuk membuka tautan.", Toast.LENGTH_SHORT).show();
         } catch (Throwable t) {
             Toast.makeText(this, "Gagal membuka tautan: " + t.getMessage(), Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    // ==================== PICTURE-IN-PICTURE (PiP) SUPPORT ====================
+
+    public boolean enterPipMode(int aspectNumerator, int aspectDenominator) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+            return false;
+        }
+        if (!getPackageManager().hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE)) {
+            Toast.makeText(this, "Perangkat tidak mendukung Picture-in-Picture", Toast.LENGTH_SHORT).show();
+            return false;
+        }
+        try {
+            PictureInPictureParams.Builder builder = new PictureInPictureParams.Builder();
+            int num = (aspectNumerator > 0) ? aspectNumerator : 16;
+            int den = (aspectDenominator > 0) ? aspectDenominator : 9;
+            Rational rational = new Rational(num, den);
+            float f = rational.floatValue();
+            if (f >= 0.41841f && f <= 2.39f) {
+                builder.setAspectRatio(rational);
+            }
+            return enterPictureInPictureMode(builder.build());
+        } catch (Throwable t) {
+            Log.e(TAG, "PiP error: " + t.getMessage());
+            return false;
+        }
+    }
+
+    @Override
+    protected void onUserLeaveHint() {
+        super.onUserLeaveHint();
+        if (autoPipEnabled && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            enterPipMode(16, 9);
+        }
+    }
+
+    @Override
+    public void onPictureInPictureModeChanged(boolean isInPictureInPictureMode, Configuration newConfig) {
+        super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig);
+        if (webView != null) {
+            webView.evaluateJavascript(
+                "if (typeof window.onPipModeChanged === 'function') { window.onPipModeChanged(" + isInPictureInPictureMode + "); }" +
+                "window.dispatchEvent(new CustomEvent('pipmodechange', { detail: { inPip: " + isInPictureInPictureMode + " } }));",
+                null
+            );
         }
     }
 
@@ -745,7 +1170,6 @@ public class MainActivity extends Activity {
     }
 
     public class NeoBridge {
-        private final Handler mainHandler = new Handler(Looper.getMainLooper());
         private final ClipboardManager clipboard = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
 
         @JavascriptInterface
@@ -823,19 +1247,30 @@ public class MainActivity extends Activity {
             if (content == null) return false;
             final String safeName = (fileName == null || fileName.trim().isEmpty()) ?
                     ("file_" + System.currentTimeMillis() + ".txt") : fileName;
-            mainHandler.post(new Runnable() {
+            ioExecutor.execute(new Runnable() {
                 @Override
                 public void run() {
                     try {
                         byte[] bytes = content.getBytes(StandardCharsets.UTF_8);
-                        boolean ok = saveBytesToDownloads(bytes, safeName, "text/plain");
-                        if (ok) {
-                            Toast.makeText(MainActivity.this, "Berkas disimpan di Downloads: " + safeName, Toast.LENGTH_LONG).show();
-                        } else {
-                            Toast.makeText(MainActivity.this, "Gagal menyimpan berkas di penyimpanan", Toast.LENGTH_SHORT).show();
-                        }
+                        final String finalName = resolveGenuineFileName(bytes, safeName, "text/plain");
+                        final boolean ok = saveBytesToDownloads(bytes, finalName, "text/plain");
+                        mainHandler.post(new Runnable() {
+                            @Override
+                            public void run() {
+                                if (ok) {
+                                    Toast.makeText(MainActivity.this, "Berkas disimpan di Downloads: " + finalName, Toast.LENGTH_LONG).show();
+                                } else {
+                                    Toast.makeText(MainActivity.this, "Gagal menyimpan berkas di penyimpanan", Toast.LENGTH_SHORT).show();
+                                }
+                            }
+                        });
                     } catch (Throwable t) {
-                        Toast.makeText(MainActivity.this, "Gagal menyimpan berkas: " + t.getMessage(), Toast.LENGTH_SHORT).show();
+                        mainHandler.post(new Runnable() {
+                            @Override
+                            public void run() {
+                                Toast.makeText(MainActivity.this, "Gagal menyimpan berkas: " + t.getMessage(), Toast.LENGTH_SHORT).show();
+                            }
+                        });
                     }
                 }
             });
@@ -845,26 +1280,120 @@ public class MainActivity extends Activity {
         @JavascriptInterface
         public boolean saveFile(final String base64Data, final String fileName, final String mimeType) {
             if (base64Data == null) return false;
-            final String safeName = (fileName == null || fileName.trim().isEmpty()) ?
-                    ("file_" + System.currentTimeMillis() + ".bin") : fileName;
-            mainHandler.post(new Runnable() {
+            ioExecutor.execute(new Runnable() {
                 @Override
                 public void run() {
                     try {
                         String clean = base64Data.contains(",") ? base64Data.substring(base64Data.indexOf(",") + 1) : base64Data;
-                        byte[] bytes = Base64.decode(clean, Base64.DEFAULT);
-                        boolean ok = saveBytesToDownloads(bytes, safeName, mimeType);
-                        if (ok) {
-                            Toast.makeText(MainActivity.this, "Berkas disimpan di Downloads: " + safeName, Toast.LENGTH_LONG).show();
-                        } else {
-                            Toast.makeText(MainActivity.this, "Gagal menyimpan berkas di penyimpanan", Toast.LENGTH_SHORT).show();
+                        String detectedMime = mimeType;
+                        if (base64Data.startsWith("data:") && base64Data.contains(";")) {
+                            detectedMime = base64Data.substring(5, base64Data.indexOf(";"));
                         }
-                    } catch (Throwable t) {
-                        Toast.makeText(MainActivity.this, "Gagal menyimpan berkas: " + t.getMessage(), Toast.LENGTH_SHORT).show();
+                        byte[] bytes = Base64.decode(clean, Base64.DEFAULT);
+
+                        // Strict format & magic byte validation
+                        final String resolvedName = resolveGenuineFileName(bytes, fileName, detectedMime);
+                        FileFormatInfo formatInfo = inspectMagicBytes(bytes, resolvedName, detectedMime);
+                        final boolean ok = saveBytesToDownloads(bytes, resolvedName, formatInfo.mimeType);
+
+                        mainHandler.post(new Runnable() {
+                            @Override
+                            public void run() {
+                                if (ok) {
+                                    Toast.makeText(MainActivity.this, "Berkas disimpan di Downloads: " + resolvedName, Toast.LENGTH_LONG).show();
+                                } else {
+                                    Toast.makeText(MainActivity.this, "Gagal menyimpan berkas di penyimpanan", Toast.LENGTH_SHORT).show();
+                                }
+                            }
+                        });
+                    } catch (final Throwable t) {
+                        mainHandler.post(new Runnable() {
+                            @Override
+                            public void run() {
+                                Toast.makeText(MainActivity.this, "Gagal menyimpan berkas: " + t.getMessage(), Toast.LENGTH_SHORT).show();
+                            }
+                        });
                     }
                 }
             });
             return true;
+        }
+
+        @JavascriptInterface
+        public boolean saveBlobData(final String base64Data, final String fileName, final String mimeType) {
+            return saveFile(base64Data, fileName, mimeType);
+        }
+
+        // ==================== SYSTEM OVERLAY PERMISSION ====================
+
+        @JavascriptInterface
+        public boolean canDrawOverlays() {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                return Settings.canDrawOverlays(MainActivity.this);
+            }
+            return true;
+        }
+
+        @JavascriptInterface
+        public boolean requestOverlayPermission() {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                if (!Settings.canDrawOverlays(MainActivity.this)) {
+                    mainHandler.post(new Runnable() {
+                        @Override
+                        public void run() {
+                            try {
+                                Intent intent = new Intent(
+                                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                    Uri.parse("package:" + getPackageName())
+                                );
+                                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                                startActivity(intent);
+                                Toast.makeText(MainActivity.this, "Aktifkan 'Izinkan ditampilkan di atas aplikasi lain'", Toast.LENGTH_LONG).show();
+                            } catch (Throwable t) {
+                                Toast.makeText(MainActivity.this, "Gagal membuka pengaturan overlay: " + t.getMessage(), Toast.LENGTH_SHORT).show();
+                            }
+                        }
+                    });
+                    return true;
+                }
+            }
+            return true;
+        }
+
+        // ==================== PICTURE-IN-PICTURE (PiP) ====================
+
+        @JavascriptInterface
+        public boolean enterPip(int aspectWidth, int aspectHeight) {
+            final int w = (aspectWidth > 0) ? aspectWidth : 16;
+            final int h = (aspectHeight > 0) ? aspectHeight : 9;
+            mainHandler.post(new Runnable() {
+                @Override
+                public void run() {
+                    enterPipMode(w, h);
+                }
+            });
+            return true;
+        }
+
+        @JavascriptInterface
+        public boolean isPipSupported() {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                return getPackageManager().hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE);
+            }
+            return false;
+        }
+
+        @JavascriptInterface
+        public boolean isInPipMode() {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                return isInPictureInPictureMode();
+            }
+            return false;
+        }
+
+        @JavascriptInterface
+        public void setAutoPip(boolean enable) {
+            autoPipEnabled = enable;
         }
 
         @JavascriptInterface
@@ -912,9 +1441,11 @@ public class MainActivity extends Activity {
                 obj.put("appName", appName);
                 obj.put("packageName", packageName);
                 obj.put("platform", "Android");
+                obj.put("pipSupported", isPipSupported());
+                obj.put("overlaySupported", true);
                 obj.put("realEsrganSupported", true);
                 obj.put("aiRuntime", "Native Real-ESRGAN 4K Engine");
-                obj.put("version", "2.0");
+                obj.put("version", "2.1-Pro");
                 return obj.toString();
             } catch (Throwable t) {
                 return "{}";

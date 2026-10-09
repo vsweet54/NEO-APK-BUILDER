@@ -97,14 +97,36 @@ object ApkBuilder {
         val iconToUse = customIconBitmap ?: loadProjectIcon(projectDir)
         if (iconToUse != null) {
             val densities = mapOf(
-                "res/mipmap-mdpi-v4/ic_launcher.png" to 48,
-                "res/mipmap-hdpi-v4/ic_launcher.png" to 72,
-                "res/mipmap-xhdpi-v4/ic_launcher.png" to 96,
-                "res/mipmap-xxhdpi-v4/ic_launcher.png" to 144,
-                "res/mipmap-xxxhdpi-v4/ic_launcher.png" to 192
+                48 to Pair(
+                    listOf("res/mipmap-mdpi-v4/ic_launcher.png", "res/mipmap-mdpi/ic_launcher.png", "res/drawable-mdpi/ic_launcher.png"),
+                    listOf("res/mipmap-mdpi-v4/ic_launcher_round.png", "res/mipmap-mdpi/ic_launcher_round.png", "res/drawable-mdpi/ic_launcher_round.png")
+                ),
+                72 to Pair(
+                    listOf("res/mipmap-hdpi-v4/ic_launcher.png", "res/mipmap-hdpi/ic_launcher.png", "res/drawable-hdpi/ic_launcher.png"),
+                    listOf("res/mipmap-hdpi-v4/ic_launcher_round.png", "res/mipmap-hdpi/ic_launcher_round.png", "res/drawable-hdpi/ic_launcher_round.png")
+                ),
+                96 to Pair(
+                    listOf("res/mipmap-xhdpi-v4/ic_launcher.png", "res/mipmap-xhdpi/ic_launcher.png", "res/drawable-xhdpi/ic_launcher.png"),
+                    listOf("res/mipmap-xhdpi-v4/ic_launcher_round.png", "res/mipmap-xhdpi/ic_launcher_round.png", "res/drawable-xhdpi/ic_launcher_round.png")
+                ),
+                144 to Pair(
+                    listOf("res/mipmap-xxhdpi-v4/ic_launcher.png", "res/mipmap-xxhdpi/ic_launcher.png", "res/drawable-xxhdpi/ic_launcher.png"),
+                    listOf("res/mipmap-xxhdpi-v4/ic_launcher_round.png", "res/mipmap-xxhdpi/ic_launcher_round.png", "res/drawable-xxhdpi/ic_launcher_round.png")
+                ),
+                192 to Pair(
+                    listOf("res/mipmap-xxxhdpi-v4/ic_launcher.png", "res/mipmap-xxxhdpi/ic_launcher.png", "res/drawable-xxxhdpi/ic_launcher.png", "res/drawable/ic_launcher.png"),
+                    listOf("res/mipmap-xxxhdpi-v4/ic_launcher_round.png", "res/mipmap-xxxhdpi/ic_launcher_round.png", "res/drawable-xxxhdpi/ic_launcher_round.png", "res/drawable/ic_launcher_round.png")
+                )
             )
-            for ((path, size) in densities) {
-                entries[path] = resizeBitmapToPng(iconToUse, size)
+            for ((size, pathsPair) in densities) {
+                val squareBytes = resizeBitmapToPng(iconToUse, size)
+                val roundBytes = createCircularBitmapToPng(iconToUse, size)
+                for (p in pathsPair.first) {
+                    entries[p] = squareBytes
+                }
+                for (p in pathsPair.second) {
+                    entries[p] = roundBytes
+                }
             }
         }
 
@@ -147,7 +169,14 @@ object ApkBuilder {
     }
 
     private fun loadProjectIcon(projectDir: File): Bitmap? {
-        val possibleIcons = listOf("icon.png", "icon.jpg", "logo.png", "logo.jpg")
+        val possibleIcons = listOf(
+            "icon.png", "icon.jpg", "icon.jpeg", "icon.webp",
+            "logo.png", "logo.jpg", "logo.jpeg", "logo.webp",
+            "app_logo.png", "app_logo.jpg",
+            "favicon.png", "favicon.ico",
+            "assets/icon.png", "assets/logo.png",
+            "img/icon.png", "img/logo.png"
+        )
         for (name in possibleIcons) {
             val f = File(projectDir, name)
             if (f.exists()) {
@@ -163,6 +192,23 @@ object ApkBuilder {
         val scaled = Bitmap.createScaledBitmap(source, size, size, true)
         val baos = ByteArrayOutputStream()
         scaled.compress(Bitmap.CompressFormat.PNG, 100, baos)
+        return baos.toByteArray()
+    }
+
+    private fun createCircularBitmapToPng(source: Bitmap, size: Int): ByteArray {
+        val output = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+        val canvas = android.graphics.Canvas(output)
+        val paint = android.graphics.Paint().apply {
+            isAntiAlias = true
+        }
+        val rect = android.graphics.Rect(0, 0, size, size)
+        canvas.drawARGB(0, 0, 0, 0)
+        canvas.drawCircle(size / 2f, size / 2f, size / 2f, paint)
+        paint.xfermode = android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.SRC_IN)
+        val scaled = Bitmap.createScaledBitmap(source, size, size, true)
+        canvas.drawBitmap(scaled, rect, rect, paint)
+        val baos = ByteArrayOutputStream()
+        output.compress(Bitmap.CompressFormat.PNG, 100, baos)
         return baos.toByteArray()
     }
 
@@ -577,6 +623,41 @@ object ApkBuilder {
       }
       return false;
     },
+    enterPip: function(aspectWidth, aspectHeight) {
+      if (native && typeof native.enterPip === 'function') {
+        return native.enterPip(aspectWidth || 16, aspectHeight || 9);
+      }
+      return false;
+    },
+    isPipSupported: function() {
+      if (native && typeof native.isPipSupported === 'function') {
+        return native.isPipSupported();
+      }
+      return false;
+    },
+    isInPipMode: function() {
+      if (native && typeof native.isInPipMode === 'function') {
+        return native.isInPipMode();
+      }
+      return false;
+    },
+    setAutoPip: function(enable) {
+      if (native && typeof native.setAutoPip === 'function') {
+        native.setAutoPip(!!enable);
+      }
+    },
+    canDrawOverlays: function() {
+      if (native && typeof native.canDrawOverlays === 'function') {
+        return native.canDrawOverlays();
+      }
+      return true;
+    },
+    requestOverlayPermission: function() {
+      if (native && typeof native.requestOverlayPermission === 'function') {
+        return native.requestOverlayPermission();
+      }
+      return true;
+    },
     vibrate: function(ms) {
       if (native && typeof native.vibrate === 'function') {
         native.vibrate(ms || 100);
@@ -626,7 +707,7 @@ object ApkBuilder {
           return {};
         }
       }
-      return { platform: 'Android', realEsrganSupported: true, aiRuntime: 'Real-ESRGAN 4K' };
+      return { platform: 'Android', pipSupported: true, overlaySupported: true, realEsrganSupported: true, aiRuntime: 'Real-ESRGAN 4K' };
     }
   };
 
@@ -667,26 +748,136 @@ object ApkBuilder {
     });
   };
 
-  // Global FileSaver / saveAs polyfill
-  if (!window.saveAs) {
-    window.saveAs = function(blob, filename) {
-      if (typeof blob === 'string') {
-        NeoBridge.downloadFile(blob, filename);
-        return;
+  // Registry for tracking created blob URLs and their genuine MIME types and references
+  window._neoBlobRegistry = window._neoBlobRegistry || new Map();
+
+  // 1. Hook window.URL.createObjectURL
+  if (window.URL && typeof window.URL.createObjectURL === 'function') {
+    const origCreateObjectURL = window.URL.createObjectURL;
+    window.URL.createObjectURL = function(obj) {
+      const url = origCreateObjectURL.apply(this, arguments);
+      if (obj instanceof Blob) {
+        window._neoBlobRegistry.set(url, {
+          blob: obj,
+          type: obj.type || '',
+          size: obj.size || 0,
+          created: Date.now()
+        });
       }
-      if (blob instanceof Blob) {
-        var reader = new FileReader();
-        reader.onloadend = function() {
-          NeoBridge.saveFile(reader.result, filename, blob.type);
-        };
-        reader.readAsDataURL(blob);
-        return;
-      }
-      NeoBridge.downloadFile(String(blob), filename);
+      return url;
     };
   }
 
-  // Intercept HTML5 <a download="..."> tag clicks
+  // 2. Robust Blob & File Download processor
+  function processBlobOrDataDownload(blobOrUrl, filename, explicitMime) {
+    var native = (window.AndroidBridge && typeof window.AndroidBridge.showToast === 'function' ? window.AndroidBridge : null) ||
+                 (window.NeoAndroid && typeof window.NeoAndroid.showToast === 'function' ? window.NeoAndroid : null) ||
+                 window.AndroidBridge ||
+                 window.NeoAndroid;
+    var targetName = filename || '';
+
+    // Direct Blob object
+    if (blobOrUrl instanceof Blob) {
+      var reader = new FileReader();
+      reader.onloadend = function() {
+        if (native && typeof native.saveFile === 'function') {
+          native.saveFile(reader.result, targetName, blobOrUrl.type || explicitMime || 'application/octet-stream');
+        }
+      };
+      reader.readAsDataURL(blobOrUrl);
+      return;
+    }
+
+    var urlStr = String(blobOrUrl);
+
+    // Blob URL
+    if (urlStr.startsWith('blob:')) {
+      var regEntry = window._neoBlobRegistry.get(urlStr);
+      if (regEntry && regEntry.blob) {
+        processBlobOrDataDownload(regEntry.blob, targetName, regEntry.type);
+        return;
+      }
+      fetch(urlStr).then(function(res) {
+        return res.blob();
+      }).then(function(blob) {
+        processBlobOrDataDownload(blob, targetName, blob.type || explicitMime);
+      }).catch(function() {
+        try {
+          var xhr = new XMLHttpRequest();
+          xhr.open('GET', urlStr, true);
+          xhr.responseType = 'blob';
+          xhr.onload = function() {
+            if (this.response instanceof Blob) {
+              processBlobOrDataDownload(this.response, targetName, this.response.type || explicitMime);
+            } else if (native && typeof native.downloadFile === 'function') {
+              native.downloadFile(urlStr, targetName, explicitMime || '');
+            }
+          };
+          xhr.onerror = function() {
+            if (native && typeof native.downloadFile === 'function') {
+              native.downloadFile(urlStr, targetName, explicitMime || '');
+            }
+          };
+          xhr.send();
+        } catch(e) {
+          if (native && typeof native.downloadFile === 'function') {
+            native.downloadFile(urlStr, targetName, explicitMime || '');
+          }
+        }
+      });
+      return;
+    }
+
+    // Data URL
+    if (urlStr.startsWith('data:')) {
+      if (native && typeof native.saveFile === 'function') {
+        native.saveFile(urlStr, targetName, explicitMime || '');
+      }
+      return;
+    }
+
+    // HTTP / HTTPS
+    if (native && typeof native.downloadFile === 'function') {
+      native.downloadFile(urlStr, targetName, explicitMime || '');
+    }
+  }
+
+  // 3. Hook HTMLAnchorElement.prototype.click
+  if (typeof HTMLAnchorElement !== 'undefined' && HTMLAnchorElement.prototype) {
+    const origAnchorClick = HTMLAnchorElement.prototype.click;
+    HTMLAnchorElement.prototype.click = function() {
+      const href = this.href || this.getAttribute('href');
+      const downloadAttr = this.getAttribute('download') || this.download || '';
+      if (href && (href.startsWith('blob:') || href.startsWith('data:') || this.hasAttribute('download') || downloadAttr)) {
+        processBlobOrDataDownload(href, downloadAttr);
+        return;
+      }
+      return origAnchorClick.apply(this, arguments);
+    };
+  }
+
+  // 4. Global FileSaver / saveAs polyfill
+  window.saveAs = function(blob, filename) {
+    processBlobOrDataDownload(blob, filename || '');
+  };
+  if (typeof navigator !== 'undefined') {
+    navigator.msSaveBlob = window.saveAs;
+    navigator.msSaveOrOpenBlob = window.saveAs;
+  }
+
+  // 5. Hook window.open for blob/data URLs
+  if (typeof window.open === 'function') {
+    const origOpen = window.open;
+    window.open = function(url, target, features) {
+      if (url && (String(url).startsWith('blob:') || String(url).startsWith('data:'))) {
+        processBlobOrDataDownload(url, '');
+        return null;
+      }
+      return origOpen.apply(this, arguments);
+    };
+  }
+
+  // 6. Capture-phase event delegation for clicks on <a> tags in DOM
   if (typeof document !== 'undefined' && document.addEventListener) {
     document.addEventListener('click', function(e) {
       var target = e.target;
@@ -694,13 +885,13 @@ object ApkBuilder {
         target = target.parentElement;
       }
       if (target) {
-        var href = target.getAttribute('href');
-        var downloadAttr = target.getAttribute('download');
+        var href = target.getAttribute('href') || target.href;
+        var downloadAttr = target.getAttribute('download') || target.download;
         if (target.hasAttribute('download') || (href && (href.startsWith('blob:') || href.startsWith('data:')))) {
-          if (href && (href.startsWith('blob:') || href.startsWith('data:') || href.startsWith('http://') || href.startsWith('https://'))) {
-            NeoBridge.downloadFile(href, downloadAttr || '');
+          if (href) {
             e.preventDefault();
             e.stopPropagation();
+            processBlobOrDataDownload(href, downloadAttr || '');
           }
         }
       }

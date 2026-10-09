@@ -516,6 +516,16 @@ class ProjectRepository(private val context: Context) {
   </div>
 
   <div class="card">
+    <h3>Uji Fitur Native & Blob Engine</h3>
+    <p>Uji unduhan Blob URL berformat PNG asli tanpa .bin, Picture-in-Picture, dan izin Overlay:</p>
+    <div class="action-buttons" style="flex-direction: column;">
+      <button type="button" class="btn-sub" style="padding: 10px;" onclick="downloadTestBlobImage()">🖼️ Unduh Gambar Canvas (Blob PNG Asli)</button>
+      <button type="button" class="btn-sub" style="padding: 10px;" onclick="testPipMode()">📺 Buka Mode Picture-in-Picture (PiP)</button>
+      <button type="button" class="btn-sub" style="padding: 10px;" onclick="testOverlayPermission()">🪟 Pengaturan Izin Overlay Sistem</button>
+    </div>
+  </div>
+
+  <div class="card">
     <h3>Riwayat Unduhan Aktif</h3>
     <div class="download-item">
       <div class="icon">📦</div>
@@ -714,6 +724,57 @@ function startDownload() {
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
+  }
+}
+
+function downloadTestBlobImage() {
+  var canvas = document.createElement('canvas');
+  canvas.width = 400;
+  canvas.height = 400;
+  var ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#060D17';
+  ctx.fillRect(0, 0, 400, 400);
+  ctx.fillStyle = '#00E5FF';
+  ctx.font = 'bold 22px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('NEO BLOB PNG VALID', 200, 180);
+  ctx.fillStyle = '#00E676';
+  ctx.font = '15px sans-serif';
+  ctx.fillText('Format terverifikasi tanpa .bin', 200, 220);
+
+  if (canvas.toBlob) {
+    canvas.toBlob(function(blob) {
+      if (!blob) return;
+      if (window.saveAs) {
+        window.saveAs(blob, 'neo_blob_test_' + Date.now() + '.png');
+      } else {
+        var blobUrl = URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = blobUrl;
+        a.download = 'neo_blob_test_' + Date.now() + '.png';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+      }
+    }, 'image/png');
+  }
+}
+
+function testPipMode() {
+  var bridge = window.AndroidBridge || window.NeoAndroid;
+  if (bridge && typeof bridge.enterPip === 'function') {
+    bridge.enterPip(16, 9);
+  } else {
+    alert('Picture-in-Picture bridge tidak tersedia.');
+  }
+}
+
+function testOverlayPermission() {
+  var bridge = window.AndroidBridge || window.NeoAndroid;
+  if (bridge && typeof bridge.requestOverlayPermission === 'function') {
+    bridge.requestOverlayPermission();
+  } else {
+    alert('Izin overlay bridge tidak tersedia.');
   }
 }
             """.trimIndent(),

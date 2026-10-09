@@ -29,6 +29,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
@@ -1359,20 +1361,46 @@ fun ProjectListItemCard(
             if (isCurrent) NeonCyan else CyberBorder
         )
     ) {
+        val cardContext = LocalContext.current
         Column(modifier = Modifier.padding(16.dp)) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                Image(
-                    painter = painterResource(id = R.drawable.ic_app_logo),
-                    contentDescription = "Project Icon",
-                    modifier = Modifier
-                        .size(46.dp)
-                        .clip(RoundedCornerShape(10.dp))
-                        .border(1.dp, if (isCurrent) NeonCyan else CyberBorder, RoundedCornerShape(10.dp))
-                )
+                val projectIcon: ImageBitmap? = remember(project.id, project.updatedAt) {
+                    val pDir = java.io.File(cardContext.filesDir, "projects/${project.folderName}")
+                    val possible = listOf("icon.png", "icon.jpg", "icon.jpeg", "logo.png", "logo.jpg", "app_logo.png")
+                    val iconFile = possible.map { java.io.File(pDir, it) }.firstOrNull { it.exists() }
+                    if (iconFile != null) {
+                        try {
+                            BitmapFactory.decodeFile(iconFile.absolutePath)?.asImageBitmap()
+                        } catch (e: Exception) {
+                            null
+                        }
+                    } else {
+                        null
+                    }
+                }
+                if (projectIcon != null) {
+                    Image(
+                        bitmap = projectIcon,
+                        contentDescription = "Project Icon",
+                        modifier = Modifier
+                            .size(46.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .border(1.dp, if (isCurrent) NeonCyan else CyberBorder, RoundedCornerShape(10.dp))
+                    )
+                } else {
+                    Image(
+                        painter = painterResource(id = R.drawable.ic_app_logo),
+                        contentDescription = "Project Icon",
+                        modifier = Modifier
+                            .size(46.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .border(1.dp, if (isCurrent) NeonCyan else CyberBorder, RoundedCornerShape(10.dp))
+                    )
+                }
 
                 Column(modifier = Modifier.weight(1f)) {
                     Row(

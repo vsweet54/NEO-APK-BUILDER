@@ -177,6 +177,18 @@ object PermissionManager {
             defaultEnabled = false,
             note = "Opsi lanjutan. Jangan gunakan jika pemilih berkas SAF sudah memadai."
         ),
+        // 15. Overlay Sistem (Floating Window)
+        PermissionDefinition(
+            id = "SYSTEM_ALERT_WINDOW",
+            title = "Izin Overlay Sistem (Floating Window)",
+            description = "Menampilkan jendela atau widget melayang di atas aplikasi lain (SYSTEM_ALERT_WINDOW)",
+            manifestPermissions = listOf("android.permission.SYSTEM_ALERT_WINDOW"),
+            category = PermissionCategory.SPECIAL_ACCESS,
+            isRuntime = false,
+            isSpecialAccess = true,
+            defaultEnabled = false,
+            note = "Izin khusus untuk floating widget atau jendela overlay. Pengguna akan diarahkan ke pengaturan sistem jika diperlukan."
+        ),
         // Tambahan getar haptic
         PermissionDefinition(
             id = "VIBRATE",

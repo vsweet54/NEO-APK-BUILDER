@@ -254,6 +254,18 @@ fun ConfigScreen(viewModel: MainViewModel) {
                                         Text("AI 4K", fontSize = 12.sp, fontWeight = FontWeight.Bold)
                                     }
                                 }
+
+                                if (customIcon != null) {
+                                    TextButton(
+                                        onClick = {
+                                            viewModel.setCustomIcon(null)
+                                            Toast.makeText(context, "Logo dikembalikan ke default", Toast.LENGTH_SHORT).show()
+                                        },
+                                        contentPadding = PaddingValues(0.dp)
+                                    ) {
+                                        Text("↺ Gunakan Logo Default", color = NeonCyan, fontSize = 11.sp)
+                                    }
+                                }
                             }
                         }
 
@@ -673,6 +685,35 @@ fun ConfigScreen(viewModel: MainViewModel) {
                                     )
                                     Text(
                                         text = "Tersedia secara native melalui ClipboardManager dan polyfill JavaScript otomatis tanpa memerlukan deklarasi izin khusus di AndroidManifest.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = TextGray,
+                                        fontSize = 11.sp
+                                    )
+                                }
+                            }
+                        }
+
+                        // Overlay & Picture-in-Picture Info Card
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = CyberSurfaceVariant,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                Icon(Icons.Default.PictureInPicture, contentDescription = null, tint = NeonGreen, modifier = Modifier.size(20.dp))
+                                Column {
+                                    Text(
+                                        text = "Picture-in-Picture (PiP) & Overlay Sistem",
+                                        fontWeight = FontWeight.Bold,
+                                        color = TextWhite,
+                                        fontSize = 12.sp
+                                    )
+                                    Text(
+                                        text = "Runner template APK mendukung android:supportsPictureInPicture=\"true\" dan android.permission.SYSTEM_ALERT_WINDOW dengan API NeoBridge (enterPip, canDrawOverlays, requestOverlayPermission).",
                                         style = MaterialTheme.typography.bodySmall,
                                         color = TextGray,
                                         fontSize = 11.sp

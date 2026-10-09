@@ -148,17 +148,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _selectedProject.value = project
         _currentDirectoryPath.value = "" // Reset to root folder when changing project
         refreshFiles(project)
-        // Load custom icon if exists
-        val iconFile = File(repository.getProjectDir(project.folderName), "icon.png")
-        if (iconFile.exists()) {
-            try {
-                _customIcon.value = BitmapFactory.decodeFile(iconFile.absolutePath)
-            } catch (ignored: Exception) {
-                _customIcon.value = null
+        // Load custom icon if exists in project dir
+        val possibleNames = listOf("icon.png", "icon.jpg", "icon.jpeg", "icon.webp", "logo.png", "logo.jpg", "logo.jpeg", "app_logo.png")
+        var loadedIcon: Bitmap? = null
+        val pDir = repository.getProjectDir(project.folderName)
+        for (name in possibleNames) {
+            val f = File(pDir, name)
+            if (f.exists()) {
+                try {
+                    loadedIcon = BitmapFactory.decodeFile(f.absolutePath)
+                    if (loadedIcon != null) break
+                } catch (ignored: Exception) {}
             }
-        } else {
-            _customIcon.value = null
         }
+        _customIcon.value = loadedIcon
     }
 
     fun refreshFiles(project: Project? = _selectedProject.value) {
@@ -444,13 +447,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun setCustomIcon(bitmap: Bitmap?) {
         _customIcon.value = bitmap
         val project = _selectedProject.value ?: return
-        if (bitmap != null) {
-            viewModelScope.launch(Dispatchers.IO) {
-                val iconFile = File(repository.getProjectDir(project.folderName), "icon.png")
-                iconFile.outputStream().use { fos ->
-                    bitmap.compress(Bitmap.CompressFormat.PNG, 100, fos)
-                }
+        viewModelScope.launch(Dispatchers.IO) {
+            val iconFile = File(repository.getProjectDir(project.folderName), "icon.png")
+            if (bitmap != null) {
+                try {
+                    iconFile.outputStream().use { fos ->
+                        bitmap.compress(Bitmap.CompressFormat.PNG, 100, fos)
+                    }
+                } catch (ignored: Exception) {}
+            } else {
+                if (iconFile.exists()) iconFile.delete()
             }
+            refreshFiles(project)
         }
     }
 

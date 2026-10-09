@@ -22,6 +22,12 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
+import android.graphics.BitmapFactory
+import android.widget.Toast
+import androidx.compose.ui.graphics.asImageBitmap
 import com.example.R
 import com.example.data.Project
 import com.example.ui.MainViewModel
@@ -38,6 +44,23 @@ fun HomeScreen(viewModel: MainViewModel) {
     val buildError by viewModel.buildError.collectAsState()
     val showBuildSuccessDialog by viewModel.showBuildSuccessDialog.collectAsState()
     val lastBuiltItem by viewModel.lastBuiltItem.collectAsState()
+    val customIcon by viewModel.customIcon.collectAsState()
+
+    val photoPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia()
+    ) { uri ->
+        if (uri != null) {
+            try {
+                context.contentResolver.openInputStream(uri)?.use { stream ->
+                    val bitmap = BitmapFactory.decodeStream(stream)
+                    if (bitmap != null) {
+                        viewModel.setCustomIcon(bitmap)
+                        Toast.makeText(context, "Logo kustom berhasil diterapkan!", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            } catch (ignored: Exception) {}
+        }
+    }
 
     var showCreateDialog by remember { mutableStateOf(false) }
     var showProjectPickerDialog by remember { mutableStateOf(false) }
@@ -124,14 +147,32 @@ fun HomeScreen(viewModel: MainViewModel) {
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(14.dp)
                     ) {
-                        Image(
-                            painter = painterResource(id = R.drawable.ic_app_logo),
-                            contentDescription = "Project Icon",
+                        Box(
                             modifier = Modifier
                                 .size(56.dp)
                                 .clip(RoundedCornerShape(14.dp))
                                 .border(1.5.dp, NeonCyanDim, RoundedCornerShape(14.dp))
-                        )
+                                .clickable {
+                                    photoPickerLauncher.launch(
+                                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                                    )
+                                },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            if (customIcon != null) {
+                                Image(
+                                    bitmap = customIcon!!.asImageBitmap(),
+                                    contentDescription = "Project Icon",
+                                    modifier = Modifier.fillMaxSize()
+                                )
+                            } else {
+                                Image(
+                                    painter = painterResource(id = R.drawable.ic_app_logo),
+                                    contentDescription = "Project Icon",
+                                    modifier = Modifier.fillMaxSize()
+                                )
+                            }
+                        }
 
                         Column(modifier = Modifier.weight(1f)) {
                             Row(
