@@ -20,6 +20,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
@@ -56,6 +57,9 @@ fun ConfigScreen(viewModel: MainViewModel) {
     var selectedPermissions by remember(project) {
         mutableStateOf(com.example.data.PermissionManager.parsePermissions(project?.permissions))
     }
+
+    var showRealEsrganDialog by remember { mutableStateOf(false) }
+    var iconToUpscale by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
 
     val photoPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia()
@@ -204,23 +208,51 @@ fun ConfigScreen(viewModel: MainViewModel) {
                                 }
                             }
 
-                            Column(modifier = Modifier.weight(1f)) {
-                                Button(
-                                    onClick = {
-                                        photoPickerLauncher.launch(
-                                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
-                                        )
-                                    },
-                                    colors = ButtonDefaults.buttonColors(
-                                        containerColor = CyberSurfaceVariant,
-                                        contentColor = TextWhite
-                                    ),
-                                    shape = RoundedCornerShape(10.dp),
-                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
-                                ) {
-                                    Icon(Icons.Default.PhotoCamera, contentDescription = null, modifier = Modifier.size(16.dp))
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text("Ganti Logo APK", fontSize = 12.sp)
+                            Column(
+                                modifier = Modifier.weight(1f),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Button(
+                                        onClick = {
+                                            photoPickerLauncher.launch(
+                                                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                                            )
+                                        },
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = CyberSurfaceVariant,
+                                            contentColor = TextWhite
+                                        ),
+                                        shape = RoundedCornerShape(10.dp),
+                                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Icon(Icons.Default.PhotoCamera, contentDescription = null, modifier = Modifier.size(16.dp))
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text("Ganti Logo", fontSize = 12.sp)
+                                    }
+
+                                    Button(
+                                        onClick = {
+                                            val iconBmp = customIcon ?: BitmapFactory.decodeResource(context.resources, R.drawable.ic_app_logo)
+                                            if (iconBmp != null) {
+                                                iconToUpscale = iconBmp
+                                                showRealEsrganDialog = true
+                                            }
+                                        },
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = Color(0xFF2C1608),
+                                            contentColor = CyberYellow
+                                        ),
+                                        border = androidx.compose.foundation.BorderStroke(1.dp, CyberYellow.copy(alpha = 0.6f)),
+                                        shape = RoundedCornerShape(10.dp),
+                                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Icon(Icons.Default.Bolt, contentDescription = null, modifier = Modifier.size(16.dp))
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text("AI 4K", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                    }
                                 }
                             }
                         }
@@ -672,6 +704,18 @@ fun ConfigScreen(viewModel: MainViewModel) {
                 }
             }
         }
+    }
+
+    if (showRealEsrganDialog && iconToUpscale != null) {
+        com.example.ui.components.RealEsrganDialog(
+            sourceBitmap = iconToUpscale!!,
+            sourceFileName = "app_logo.png",
+            viewModel = viewModel,
+            onDismiss = {
+                showRealEsrganDialog = false
+                iconToUpscale = null
+            }
+        )
     }
 }
 

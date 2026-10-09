@@ -42,11 +42,27 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _currentFiles = MutableStateFlow<List<WebProjectFile>>(emptyList())
     val currentFiles: StateFlow<List<WebProjectFile>> = _currentFiles.asStateFlow()
 
+    private val _currentDirectoryPath = MutableStateFlow("")
+    val currentDirectoryPath: StateFlow<String> = _currentDirectoryPath.asStateFlow()
+
+    private val _directoryFiles = MutableStateFlow<List<WebProjectFile>>(emptyList())
+    val directoryFiles: StateFlow<List<WebProjectFile>> = _directoryFiles.asStateFlow()
+
     private val _activeEditingFile = MutableStateFlow<WebProjectFile?>(null)
     val activeEditingFile: StateFlow<WebProjectFile?> = _activeEditingFile.asStateFlow()
 
     private val _fileContent = MutableStateFlow("")
     val fileContent: StateFlow<String> = _fileContent.asStateFlow()
+
+    // Real-ESRGAN Native AI State
+    private val _isUpscaling = MutableStateFlow(false)
+    val isUpscaling: StateFlow<Boolean> = _isUpscaling.asStateFlow()
+
+    private val _upscaleProgress = MutableStateFlow<com.example.ai.RealEsrganProgress?>(null)
+    val upscaleProgress: StateFlow<com.example.ai.RealEsrganProgress?> = _upscaleProgress.asStateFlow()
+
+    private val _upscaledResultBitmap = MutableStateFlow<Bitmap?>(null)
+    val upscaledResultBitmap: StateFlow<Bitmap?> = _upscaledResultBitmap.asStateFlow()
 
     private val _isBuilding = MutableStateFlow(false)
     val isBuilding: StateFlow<Boolean> = _isBuilding.asStateFlow()
@@ -130,6 +146,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun selectProject(project: Project) {
         _selectedProject.value = project
+        _currentDirectoryPath.value = "" // Reset to root folder when changing project
         refreshFiles(project)
         // Load custom icon if exists
         val iconFile = File(repository.getProjectDir(project.folderName), "icon.png")
@@ -147,9 +164,56 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun refreshFiles(project: Project? = _selectedProject.value) {
         if (project == null) return
         viewModelScope.launch(Dispatchers.IO) {
-            val files = repository.listProjectFiles(project)
-            _currentFiles.value = files
+            val allFiles = repository.listProjectFiles(project)
+            val dirFiles = repository.listFilesAtDirectory(project, _currentDirectoryPath.value)
+            withContext(Dispatchers.Main) {
+                _currentFiles.value = allFiles
+                _directoryFiles.value = dirFiles
+            }
         }
+    }
+
+    fun navigateIntoFolder(folderRelPath: String) {
+        _currentDirectoryPath.value = folderRelPath.trim().removePrefix("/").removeSuffix("/")
+        refreshFiles()
+    }
+
+    fun navigateUpFolder() {
+        val current = _currentDirectoryPath.value.trim().removePrefix("/").removeSuffix("/")
+        if (current.isEmpty()) return
+        val lastSlash = current.lastIndexOf('/')
+        _currentDirectoryPath.value = if (lastSlash != -1) current.substring(0, lastSlash) else ""
+        refreshFiles()
+    }
+
+    fun navigateToBreadcrumb(targetPath: String) {
+        _currentDirectoryPath.value = targetPath.trim().removePrefix("/").removeSuffix("/")
+        refreshFiles()
+    }
+
+    fun createFolder(folderName: String) {
+        val project = _selectedProject.value ?: return
+        val cleanName = folderName.trim().replace("[^a-zA-Z0-9_-]".toRegex(), "_")
+        if (cleanName.isBlank()) return
+        val currentDir = _currentDirectoryPath.value.trim().removePrefix("/").removeSuffix("/")
+        val targetPath = if (currentDir.isEmpty()) cleanName else "$currentDir/$cleanName"
+        viewModelScope.launch(Dispatchers.IO) {
+            repository.createFolder(project, targetPath)
+            refreshFiles(project)
+        }
+    }
+
+    fun deleteFolder(folder: WebProjectFile) {
+        val project = _selectedProject.value ?: return
+        viewModelScope.launch(Dispatchers.IO) {
+            repository.deleteFolder(project, folder.relativePath)
+            refreshFiles(project)
+        }
+    }
+
+    fun getProjectFileBitmap(file: WebProjectFile): Bitmap? {
+        val project = _selectedProject.value ?: return null
+        return repository.getBitmap(project, file.relativePath)
     }
 
     fun createProject(name: String, packageName: String, template: String) {
@@ -219,8 +283,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun createFile(relPath: String, content: String) {
         val project = _selectedProject.value ?: return
+        val currentDir = _currentDirectoryPath.value.trim().removePrefix("/").removeSuffix("/")
+        val finalRel = if (currentDir.isNotEmpty() && !relPath.contains("/")) {
+            "$currentDir/${relPath.trim()}"
+        } else {
+            relPath.trim()
+        }
         viewModelScope.launch(Dispatchers.IO) {
-            repository.saveFile(project, relPath, content)
+            repository.saveFile(project, finalRel, content)
             refreshFiles(project)
         }
     }
@@ -236,19 +306,87 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun importFiles(
         uris: List<android.net.Uri>,
         contentResolver: android.content.ContentResolver,
+        targetSubFolder: String = _currentDirectoryPath.value,
         onComplete: (Int) -> Unit = {}
     ) {
         val project = _selectedProject.value ?: _projects.value.firstOrNull() ?: return
         viewModelScope.launch(Dispatchers.IO) {
             _isImporting.value = true
-            val count = repository.importFilesFromUris(project, uris, contentResolver)
-            val updatedFiles = repository.listProjectFiles(project)
+            val count = repository.importFilesFromUris(project, uris, contentResolver, targetSubFolder)
+            refreshFiles(project)
             withContext(Dispatchers.Main) {
-                _currentFiles.value = ArrayList(updatedFiles)
                 _isImporting.value = false
                 onComplete(count)
             }
         }
+    }
+
+    // Native AI Real-ESRGAN Super-Resolution
+    fun upscaleImageWithRealEsrgan(
+        sourceBitmap: Bitmap,
+        config: com.example.ai.RealEsrganConfig,
+        onFinished: ((Bitmap) -> Unit)? = null
+    ) {
+        _isUpscaling.value = true
+        _upscaleProgress.value = com.example.ai.RealEsrganProgress(
+            percent = 0,
+            currentTile = 0,
+            totalTiles = 1,
+            statusText = "Menyiapkan mesin Native AI Real-ESRGAN 4K..."
+        )
+        viewModelScope.launch(Dispatchers.Default) {
+            try {
+                val enhanced = com.example.ai.RealEsrganEngine.processImage(
+                    context = getApplication(),
+                    inputBitmap = sourceBitmap,
+                    config = config,
+                    onProgress = { progress ->
+                        _upscaleProgress.value = progress
+                    }
+                )
+                withContext(Dispatchers.Main) {
+                    _upscaledResultBitmap.value = enhanced
+                    _isUpscaling.value = false
+                    onFinished?.invoke(enhanced)
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    _isUpscaling.value = false
+                    _upscaleProgress.value = com.example.ai.RealEsrganProgress(
+                        percent = 0,
+                        currentTile = 0,
+                        totalTiles = 0,
+                        statusText = "Gagal memproses Real-ESRGAN: ${e.message}"
+                    )
+                }
+            }
+        }
+    }
+
+    fun saveUpscaledAsProjectAsset(
+        bitmap: Bitmap,
+        fileName: String,
+        targetFolder: String = _currentDirectoryPath.value
+    ) {
+        val project = _selectedProject.value ?: return
+        val cleanDir = targetFolder.trim().removePrefix("/").removeSuffix("/")
+        val cleanFileName = if (fileName.endsWith(".png", ignoreCase = true)) fileName else "$fileName.png"
+        val relPath = if (cleanDir.isEmpty()) cleanFileName else "$cleanDir/$cleanFileName"
+        viewModelScope.launch(Dispatchers.IO) {
+            val file = repository.getFile(project, relPath)
+            com.example.ai.RealEsrganEngine.saveBitmapToFile(bitmap, file)
+            refreshFiles(project)
+        }
+    }
+
+    fun applyUpscaledAsAppIcon(bitmap: Bitmap) {
+        setCustomIcon(bitmap)
+    }
+
+    fun clearUpscaledResult() {
+        _upscaledResultBitmap.value = null
+        _upscaleProgress.value = null
+        _isUpscaling.value = false
     }
 
     fun saveFullConfig(

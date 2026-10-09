@@ -145,6 +145,66 @@ class ProjectRepository(private val context: Context) {
         return list.sortedWith(compareBy({ !it.isDirectory }, { it.name }))
     }
 
+    /**
+     * Lists only direct items in the specified relative directory path for nested navigation.
+     */
+    fun listFilesAtDirectory(project: Project, subPath: String): List<WebProjectFile> {
+        val projectDir = getProjectDir(project.folderName)
+        val cleanSub = subPath.trim().removePrefix("/").removeSuffix("/")
+        val targetDir = if (cleanSub.isEmpty()) projectDir else File(projectDir, cleanSub)
+        if (!targetDir.exists() || !targetDir.isDirectory) return emptyList()
+
+        val list = mutableListOf<WebProjectFile>()
+        val files = targetDir.listFiles() ?: return emptyList()
+        for (f in files) {
+            if (f.name.startsWith(".")) continue
+            val childRel = if (cleanSub.isEmpty()) f.name else "$cleanSub/${f.name}"
+            list.add(
+                WebProjectFile(
+                    name = f.name,
+                    relativePath = childRel,
+                    isDirectory = f.isDirectory,
+                    sizeBytes = if (f.isDirectory) calculateDirectorySize(f) else f.length(),
+                    lastModified = f.lastModified()
+                )
+            )
+        }
+        // Folders first, then files alphabetically
+        return list.sortedWith(compareBy({ !it.isDirectory }, { it.name.lowercase() }))
+    }
+
+    private fun calculateDirectorySize(dir: File): Long {
+        var size = 0L
+        dir.walkTopDown().filter { it.isFile }.forEach { size += it.length() }
+        return size
+    }
+
+    fun createFolder(project: Project, folderRelPath: String): Boolean {
+        val cleanRel = folderRelPath.trim().removePrefix("/").removeSuffix("/")
+        if (cleanRel.isBlank()) return false
+        val f = File(getProjectDir(project.folderName), cleanRel)
+        return f.mkdirs()
+    }
+
+    fun deleteFolder(project: Project, folderRelPath: String): Boolean {
+        val f = File(getProjectDir(project.folderName), folderRelPath)
+        return f.deleteRecursively()
+    }
+
+    fun getFile(project: Project, relativePath: String): File {
+        return File(getProjectDir(project.folderName), relativePath)
+    }
+
+    fun getBitmap(project: Project, relativePath: String): Bitmap? {
+        val f = getFile(project, relativePath)
+        if (!f.exists()) return null
+        return try {
+            BitmapFactory.decodeFile(f.absolutePath)
+        } catch (e: Exception) {
+            null
+        }
+    }
+
     fun readFile(project: Project, relativePath: String): String {
         val f = File(getProjectDir(project.folderName), relativePath)
         return if (f.exists()) f.readText(Charsets.UTF_8) else ""
@@ -174,9 +234,12 @@ class ProjectRepository(private val context: Context) {
     suspend fun importFilesFromUris(
         project: Project,
         uris: List<Uri>,
-        contentResolver: ContentResolver
+        contentResolver: ContentResolver,
+        targetSubFolder: String = ""
     ): Int = withContext(Dispatchers.IO) {
         val projectDir = getProjectDir(project.folderName)
+        val cleanSub = targetSubFolder.trim().removePrefix("/").removeSuffix("/")
+        val destDir = if (cleanSub.isEmpty()) projectDir else File(projectDir, cleanSub).apply { mkdirs() }
         var count = 0
         for (uri in uris) {
             try {
@@ -197,11 +260,11 @@ class ProjectRepository(private val context: Context) {
 
                 if (displayName.endsWith(".zip", ignoreCase = true)) {
                     contentResolver.openInputStream(uri)?.use { stream ->
-                        unzipStream(stream, projectDir)
+                        unzipStream(stream, destDir)
                         count++
                     }
                 } else {
-                    val targetFile = File(projectDir, displayName)
+                    val targetFile = File(destDir, displayName)
                     contentResolver.openInputStream(uri)?.use { input ->
                         FileOutputStream(targetFile).use { output ->
                             input.copyTo(output)

@@ -94,4 +94,80 @@ class ExampleRobolectricTest {
         val verifier = com.android.apksig.ApkVerifier.Builder(apkFile).build()
         assertTrue(verifier.verify().isVerified)
     }
+
+    @Test
+    fun `test Real-ESRGAN 4K target dimensions calculation`() {
+        val config4K = com.example.ai.RealEsrganConfig(
+            model = com.example.ai.RealEsrganModel.REAL_ESRGAN_X4PLUS,
+            resolutionPreset = com.example.ai.TargetResolutionPreset.UHD_4K
+        )
+        val (w4k, h4k) = com.example.ai.RealEsrganEngine.computeTargetDimensions(512, 512, config4K)
+        assertTrue("4K width should be 3840 or scaled proportion", w4k >= 2160)
+
+        val configSquare4K = com.example.ai.RealEsrganConfig(
+            model = com.example.ai.RealEsrganModel.REAL_ESRNET_ICONS,
+            resolutionPreset = com.example.ai.TargetResolutionPreset.SQUARE_4K
+        )
+        val (wSq, hSq) = com.example.ai.RealEsrganEngine.computeTargetDimensions(256, 256, configSquare4K)
+        assertEquals(4096, wSq)
+        assertEquals(4096, hSq)
+    }
+
+    @Test
+    fun `test Real-ESRGAN offline super-resolution tile execution`() = kotlinx.coroutines.test.runTest {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val testBmp = android.graphics.Bitmap.createBitmap(64, 64, android.graphics.Bitmap.Config.ARGB_8888)
+        val canvas = android.graphics.Canvas(testBmp)
+        canvas.drawColor(android.graphics.Color.CYAN)
+
+        val config = com.example.ai.RealEsrganConfig(
+            model = com.example.ai.RealEsrganModel.REAL_ESRGAN_FAST_2X,
+            resolutionPreset = com.example.ai.TargetResolutionPreset.SCALE_2X,
+            tileSize = 128
+        )
+
+        var lastPercent = 0
+        val upscaled = com.example.ai.RealEsrganEngine.processImage(context, testBmp, config) { progress ->
+            lastPercent = progress.percent
+        }
+
+        assertNotNull(upscaled)
+        assertEquals(128, upscaled.width)
+        assertEquals(128, upscaled.height)
+        assertEquals(100, lastPercent)
+    }
+
+    @Test
+    fun `test nested folder hierarchical operations`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val repo = com.example.data.ProjectRepository(context)
+        val project = com.example.data.Project(
+            name = "FolderTest",
+            folderName = "foldertest_${System.currentTimeMillis()}",
+            packageName = "com.neo.foldertest"
+        )
+        val projDir = repo.getProjectDir(project.folderName)
+
+        // Create nested folders
+        repo.createFolder(project, "assets/images")
+        repo.createFolder(project, "css")
+        repo.saveFile(project, "index.html", "<h1>Root</h1>")
+        repo.saveFile(project, "css/style.css", "body { color: red; }")
+        repo.saveFile(project, "assets/images/logo.png", "dummy-image-data")
+
+        // Root listing should only show direct children: css, assets, index.html
+        val rootItems = repo.listFilesAtDirectory(project, "")
+        assertTrue(rootItems.any { it.name == "assets" && it.isDirectory })
+        assertTrue(rootItems.any { it.name == "css" && it.isDirectory })
+        assertTrue(rootItems.any { it.name == "index.html" && !it.isDirectory })
+        assertFalse(rootItems.any { it.name == "style.css" }) // style.css is inside css/
+
+        // Listing inside css/
+        val cssItems = repo.listFilesAtDirectory(project, "css")
+        assertEquals(1, cssItems.size)
+        assertEquals("style.css", cssItems.first().name)
+
+        // Clean up
+        projDir.deleteRecursively()
+    }
 }
