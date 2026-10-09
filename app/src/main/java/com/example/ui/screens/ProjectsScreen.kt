@@ -1,7 +1,9 @@
 package com.example.ui.screens
 
+import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.net.Uri
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.Toast
@@ -1872,7 +1874,37 @@ fun WebPreviewDialog(
                             addJavascriptInterface(bridge, "AndroidBridge")
                             addJavascriptInterface(bridge, "NeoAndroid")
 
+                            setDownloadListener { url, userAgent, contentDisposition, mimeType, _ ->
+                                bridge.handleDownload(url, contentDisposition, mimeType, userAgent, this)
+                            }
+
                             webViewClient = object : WebViewClient() {
+                                override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean {
+                                    if (url == null) return false
+                                    if (url.startsWith("file:///") || url.startsWith("about:")) return false
+                                    if (url.startsWith("blob:") || url.startsWith("data:")) {
+                                        bridge.handleDownload(url, null, null, null, view)
+                                        return true
+                                    }
+                                    val lower = url.lowercase()
+                                    if (lower.endsWith(".apk") || lower.endsWith(".zip") || lower.endsWith(".pdf") ||
+                                        lower.endsWith(".bin") || lower.contains("download=true")) {
+                                        bridge.handleDownload(url, null, null, null, view)
+                                        return true
+                                    }
+                                    if (url.startsWith("http://") || url.startsWith("https://")) return false
+                                    return try {
+                                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+                                            flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                                        }
+                                        ctx.startActivity(intent)
+                                        true
+                                    } catch (e: Exception) {
+                                        Toast.makeText(ctx, "Tidak ada aplikasi untuk membuka: $url", Toast.LENGTH_SHORT).show()
+                                        true
+                                    }
+                                }
+
                                 override fun onPageFinished(view: WebView?, url: String?) {
                                     super.onPageFinished(view, url)
                                     // Inject bridge scripts if not in HTML

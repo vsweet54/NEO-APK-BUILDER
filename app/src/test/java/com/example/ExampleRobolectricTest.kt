@@ -170,4 +170,81 @@ class ExampleRobolectricTest {
         // Clean up
         projDir.deleteRecursively()
     }
+
+    @Test
+    fun `test AndroidBridge saveTextFile and saveFile to storage`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val bridge = com.example.bridge.AndroidBridge(context, "TestApp", "com.test.app")
+
+        val saveTextOk = bridge.saveTextFile("Hello Download Test Content", "test_file.txt", "text/plain")
+        assertTrue("saveTextFile should return true", saveTextOk)
+
+        val base64Data = "data:text/plain;base64," + android.util.Base64.encodeToString(
+            "Base64 download test content".toByteArray(Charsets.UTF_8),
+            android.util.Base64.NO_WRAP
+        )
+        val saveFileOk = bridge.saveFile(base64Data, "test_b64.txt", "text/plain")
+        assertTrue("saveFile should return true", saveFileOk)
+    }
+
+    @Test
+    fun `test AndroidBridge downloadFile handles data and http schemes safely`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val bridge = com.example.bridge.AndroidBridge(context, "TestApp", "com.test.app")
+
+        // Test data URL download
+        val dataUrl = "data:text/plain;base64," + android.util.Base64.encodeToString(
+            "Data URL direct download".toByteArray(Charsets.UTF_8),
+            android.util.Base64.NO_WRAP
+        )
+        val dlDataOk = bridge.downloadFile(dataUrl, "data_download.txt", "text/plain")
+        assertTrue("downloadFile with data URI should succeed", dlDataOk)
+
+        // Test http URL download (should queue or handle safely without crashing)
+        val dlHttpOk = bridge.downloadFile("https://example.com/sample.zip", "sample.zip", "application/zip")
+        assertTrue("downloadFile with http URI should succeed", dlHttpOk)
+
+        // Test blob URL handling without throwing ActivityNotFoundException
+        bridge.handleDownload("blob:http://localhost/1234-5678", null, "application/octet-stream", null, null)
+    }
+
+    @Test
+    fun `test built APK contains updated download bridge and classes dex`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val testProjectDir = File(context.filesDir, "test_dl_apk").apply { mkdirs() }
+        File(testProjectDir, "index.html").writeText("<a href=\"file.zip\" download=\"file.zip\">Unduh</a>")
+
+        val config = ProjectConfig(
+            appName = "TEST DOWNLOADER",
+            packageName = "com.neo.testdl",
+            versionName = "1.0.0",
+            versionCode = 1,
+            permissions = "INTERNET,ACCESS_NETWORK_STATE,POST_NOTIFICATIONS"
+        )
+
+        val apkFile = ApkBuilder.buildApk(
+            context = context,
+            config = config,
+            projectDir = testProjectDir,
+            customIconBitmap = null
+        )
+
+        assertTrue(apkFile.exists())
+        java.util.zip.ZipFile(apkFile).use { zip ->
+            val bridgeEntry = zip.getEntry("assets/www/neo_bridge.js")
+            assertNotNull("neo_bridge.js must exist in built APK", bridgeEntry)
+            val bridgeJs = zip.getInputStream(bridgeEntry).readBytes().toString(Charsets.UTF_8)
+            assertTrue("neo_bridge.js must contain downloadFile", bridgeJs.contains("downloadFile"))
+            assertTrue("neo_bridge.js must contain download attribute interceptor", bridgeJs.contains("download"))
+
+            val dexEntry = zip.getEntry("classes.dex")
+            assertNotNull("classes.dex must exist in built APK", dexEntry)
+            val dexBytes = zip.getInputStream(dexEntry).readBytes()
+            val dexStr = String(dexBytes, Charsets.ISO_8859_1)
+            assertTrue("classes.dex must contain saveBytesToDownloads", dexStr.contains("saveBytesToDownloads"))
+            assertTrue("classes.dex must contain DownloadManager", dexStr.contains("DownloadManager"))
+        }
+
+        testProjectDir.deleteRecursively()
+    }
 }

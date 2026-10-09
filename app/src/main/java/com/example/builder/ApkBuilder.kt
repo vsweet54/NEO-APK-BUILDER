@@ -556,6 +556,15 @@ object ApkBuilder {
       }
       return '';
     },
+    downloadFile: function(url, fileName, mimeType) {
+      if (native && typeof native.downloadFile === 'function') {
+        return native.downloadFile(String(url), fileName || '', mimeType || '');
+      }
+      if (native && typeof native.saveFile === 'function' && typeof url === 'string' && url.startsWith('data:')) {
+        return native.saveFile(url, fileName || '', mimeType || '');
+      }
+      return false;
+    },
     saveTextFile: function(content, fileName, mimeType) {
       if (native && typeof native.saveTextFile === 'function') {
         return native.saveTextFile(content, fileName, mimeType || 'text/plain');
@@ -657,6 +666,46 @@ object ApkBuilder {
       }
     });
   };
+
+  // Global FileSaver / saveAs polyfill
+  if (!window.saveAs) {
+    window.saveAs = function(blob, filename) {
+      if (typeof blob === 'string') {
+        NeoBridge.downloadFile(blob, filename);
+        return;
+      }
+      if (blob instanceof Blob) {
+        var reader = new FileReader();
+        reader.onloadend = function() {
+          NeoBridge.saveFile(reader.result, filename, blob.type);
+        };
+        reader.readAsDataURL(blob);
+        return;
+      }
+      NeoBridge.downloadFile(String(blob), filename);
+    };
+  }
+
+  // Intercept HTML5 <a download="..."> tag clicks
+  if (typeof document !== 'undefined' && document.addEventListener) {
+    document.addEventListener('click', function(e) {
+      var target = e.target;
+      while (target && target.tagName !== 'A') {
+        target = target.parentElement;
+      }
+      if (target) {
+        var href = target.getAttribute('href');
+        var downloadAttr = target.getAttribute('download');
+        if (target.hasAttribute('download') || (href && (href.startsWith('blob:') || href.startsWith('data:')))) {
+          if (href && (href.startsWith('blob:') || href.startsWith('data:') || href.startsWith('http://') || href.startsWith('https://'))) {
+            NeoBridge.downloadFile(href, downloadAttr || '');
+            e.preventDefault();
+            e.stopPropagation();
+          }
+        }
+      }
+    }, true);
+  }
 })(window);
         """.trimIndent()
     }

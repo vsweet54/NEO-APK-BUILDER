@@ -1,11 +1,13 @@
 package com.example.ui.screens
 
+import android.app.DownloadManager
 import android.content.ActivityNotFoundException
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.os.Environment
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -306,18 +308,28 @@ fun HostingScreen(viewModel: MainViewModel) {
                             },
                             onDownload = {
                                 try {
-                                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(item.directDownloadUrl)).apply {
-                                        flags = Intent.FLAG_ACTIVITY_NEW_TASK
-                                    }
-                                    if (intent.resolveActivity(context.packageManager) != null) {
-                                        context.startActivity(intent)
+                                    val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as? DownloadManager
+                                    if (dm != null && (item.directDownloadUrl.startsWith("http://") || item.directDownloadUrl.startsWith("https://"))) {
+                                        val uri = Uri.parse(item.directDownloadUrl)
+                                        val safeName = "${item.appName.replace("[^a-zA-Z0-9_-]".toRegex(), "_")}_v${item.versionName}.apk"
+                                        val request = DownloadManager.Request(uri).apply {
+                                            setTitle("Mengunduh ${item.appName}")
+                                            setDescription("Mengunduh berkas APK")
+                                            setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                                            setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, safeName)
+                                        }
+                                        dm.enqueue(request)
+                                        Toast.makeText(context, "Memulai unduhan: $safeName", Toast.LENGTH_SHORT).show()
                                     } else {
-                                        Toast.makeText(context, "Tidak ada browser untuk membuka tautan unduhan.", Toast.LENGTH_SHORT).show()
+                                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(item.directDownloadUrl)).apply {
+                                            flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                                        }
+                                        context.startActivity(intent)
                                     }
                                 } catch (e: ActivityNotFoundException) {
-                                    Toast.makeText(context, "Tidak ditemukan aplikasi browser di perangkat.", Toast.LENGTH_SHORT).show()
+                                    Toast.makeText(context, "Tidak ditemukan aplikasi peramban di perangkat.", Toast.LENGTH_SHORT).show()
                                 } catch (e: Exception) {
-                                    Toast.makeText(context, "Gagal membuka link: ${e.message}", Toast.LENGTH_SHORT).show()
+                                    Toast.makeText(context, "Gagal mengunduh berkas: ${e.message}", Toast.LENGTH_SHORT).show()
                                 }
                             },
                             onShare = {
@@ -334,11 +346,7 @@ fun HostingScreen(viewModel: MainViewModel) {
                                     val chooser = Intent.createChooser(shareIntent, "Bagikan Link APK").apply {
                                         flags = Intent.FLAG_ACTIVITY_NEW_TASK
                                     }
-                                    if (shareIntent.resolveActivity(context.packageManager) != null) {
-                                        context.startActivity(chooser)
-                                    } else {
-                                        Toast.makeText(context, "Tidak ada aplikasi untuk membagikan tautan.", Toast.LENGTH_SHORT).show()
-                                    }
+                                    context.startActivity(chooser)
                                 } catch (e: ActivityNotFoundException) {
                                     Toast.makeText(context, "Aplikasi untuk berbagi tidak tersedia.", Toast.LENGTH_SHORT).show()
                                 } catch (e: Exception) {

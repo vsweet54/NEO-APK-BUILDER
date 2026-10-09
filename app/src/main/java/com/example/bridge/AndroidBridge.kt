@@ -1,10 +1,15 @@
 package com.example.bridge
 
+import android.app.DownloadManager
+import android.content.ActivityNotFoundException
 import android.content.ClipData
 import android.content.ClipboardManager
+import android.content.ContentValues
 import android.content.Context
+import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.os.Handler
@@ -12,8 +17,12 @@ import android.os.Looper
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
+import android.provider.MediaStore
 import android.util.Base64
+import android.webkit.CookieManager
 import android.webkit.JavascriptInterface
+import android.webkit.URLUtil
+import android.webkit.WebView
 import android.widget.Toast
 import com.example.ai.RealEsrganConfig
 import com.example.ai.RealEsrganEngine
@@ -24,6 +33,9 @@ import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
+import java.io.InputStream
+import java.net.HttpURLConnection
+import java.net.URL
 
 /**
  * Native Android Bridge providing seamless two-way communication between
@@ -78,36 +90,88 @@ class AndroidBridge(
         }
     }
 
+    fun saveBytesToDownloads(bytes: ByteArray, fileName: String?, mimeType: String?): Boolean {
+        if (bytes.isEmpty()) return false
+        val safeName = if (fileName.isNullOrBlank()) "download_${System.currentTimeMillis()}.bin" else fileName
+        val effMime = if (mimeType.isNullOrBlank()) "application/octet-stream" else mimeType
+
+        // 1. Android 10+ (API 29+) MediaStore scoped storage
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            try {
+                val resolver = context.contentResolver
+                val values = ContentValues().apply {
+                    put(MediaStore.Downloads.DISPLAY_NAME, safeName)
+                    put(MediaStore.Downloads.MIME_TYPE, effMime)
+                    put(MediaStore.Downloads.IS_PENDING, 1)
+                }
+                val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                if (uri != null) {
+                    resolver.openOutputStream(uri)?.use { os ->
+                        os.write(bytes)
+                        os.flush()
+                    }
+                    values.clear()
+                    values.put(MediaStore.Downloads.IS_PENDING, 0)
+                    resolver.update(uri, values, null, null)
+                    return true
+                }
+            } catch (t: Throwable) {
+                t.printStackTrace()
+            }
+        }
+
+        // 2. Direct external public Downloads directory
+        try {
+            val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+            if (!downloadsDir.exists()) downloadsDir.mkdirs()
+            val targetFile = File(downloadsDir, safeName)
+            FileOutputStream(targetFile).use { fos ->
+                fos.write(bytes)
+                fos.flush()
+            }
+            return true
+        } catch (t: Throwable) {
+            t.printStackTrace()
+        }
+
+        // 3. Fallback to app-specific external or internal files
+        try {
+            val fallbackDir = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS) ?: context.filesDir
+            val fallbackFile = File(fallbackDir, safeName)
+            FileOutputStream(fallbackFile).use { fos ->
+                fos.write(bytes)
+                fos.flush()
+            }
+            return true
+        } catch (t: Throwable) {
+            t.printStackTrace()
+            return false
+        }
+    }
+
+    @JavascriptInterface
+    fun downloadFile(url: String?, fileName: String?, mimeType: String?): Boolean {
+        if (url.isNullOrBlank()) return false
+        mainHandler.post {
+            handleDownload(url, fileName, mimeType, null)
+        }
+        return true
+    }
+
     @JavascriptInterface
     fun saveTextFile(content: String?, fileName: String?, mimeType: String?): Boolean {
         if (content == null) return false
         val name = if (fileName.isNullOrBlank()) "file_${System.currentTimeMillis()}.txt" else fileName
-        return try {
-            val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-            if (!downloadsDir.exists()) downloadsDir.mkdirs()
-            val targetFile = File(downloadsDir, name)
-            FileOutputStream(targetFile).use { fos ->
-                fos.write(content.toByteArray(Charsets.UTF_8))
-            }
-            mainHandler.post {
+        val bytes = content.toByteArray(Charsets.UTF_8)
+        val ok = saveBytesToDownloads(bytes, name, "text/plain")
+        mainHandler.post {
+            if (ok) {
                 Toast.makeText(context, "Berkas disimpan ke Downloads: $name", Toast.LENGTH_LONG).show()
-            }
-            true
-        } catch (e: Exception) {
-            // Fallback to internal storage
-            try {
-                val fallbackFile = File(context.filesDir, name)
-                FileOutputStream(fallbackFile).use { fos ->
-                    fos.write(content.toByteArray(Charsets.UTF_8))
-                }
-                mainHandler.post {
-                    Toast.makeText(context, "Berkas disimpan: $name", Toast.LENGTH_SHORT).show()
-                }
-                true
-            } catch (err: Exception) {
-                false
+            } else {
+                Toast.makeText(context, "Gagal menyimpan berkas di penyimpanan", Toast.LENGTH_SHORT).show()
             }
         }
+        return ok
     }
 
     @JavascriptInterface
@@ -117,19 +181,154 @@ class AndroidBridge(
         return try {
             val cleanBase64 = if (base64Data.contains(",")) base64Data.substringAfter(",") else base64Data
             val bytes = Base64.decode(cleanBase64, Base64.DEFAULT)
-            val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-            if (!downloadsDir.exists()) downloadsDir.mkdirs()
-            val targetFile = File(downloadsDir, name)
-            FileOutputStream(targetFile).use { fos ->
-                fos.write(bytes)
-            }
+            val ok = saveBytesToDownloads(bytes, name, mimeType)
             mainHandler.post {
-                Toast.makeText(context, "Berkas berhasil disimpan: $name", Toast.LENGTH_SHORT).show()
+                if (ok) {
+                    Toast.makeText(context, "Berkas disimpan ke Downloads: $name", Toast.LENGTH_LONG).show()
+                } else {
+                    Toast.makeText(context, "Gagal menyimpan berkas di penyimpanan", Toast.LENGTH_SHORT).show()
+                }
             }
-            true
+            ok
         } catch (e: Exception) {
             e.printStackTrace()
             false
+        }
+    }
+
+    fun handleDownload(url: String?, contentDisposition: String? = null, mimeType: String? = null, userAgent: String? = null, webView: WebView? = null) {
+        if (url.isNullOrBlank()) return
+
+        // 1. BLOB URL
+        if (url.startsWith("blob:")) {
+            val safeName = guessFileName(url, contentDisposition, mimeType)
+            if (webView != null) {
+                val js = "javascript:(function(){" +
+                        "try {" +
+                        "  var xhr = new XMLHttpRequest();" +
+                        "  xhr.open('GET', '" + url.replace("'", "\\'") + "', true);" +
+                        "  xhr.responseType = 'blob';" +
+                        "  xhr.onload = function() {" +
+                        "    if (this.status === 200 || this.status === 0) {" +
+                        "      var b = this.response;" +
+                        "      var r = new FileReader();" +
+                        "      r.onloadend = function() {" +
+                        "        var bridge = window.AndroidBridge || window.NeoAndroid;" +
+                        "        if (bridge && typeof bridge.saveFile === 'function') {" +
+                        "          bridge.saveFile(r.result, '" + safeName.replace("'", "\\'") + "', '" + (mimeType?.replace("'", "\\'") ?: "application/octet-stream") + "');" +
+                        "        }" +
+                        "      };" +
+                        "      r.readAsDataURL(b);" +
+                        "    }" +
+                        "  };" +
+                        "  xhr.onerror = function() {" +
+                        "    var bridge = window.AndroidBridge || window.NeoAndroid;" +
+                        "    if (bridge && typeof bridge.showToast === 'function') bridge.showToast('Gagal memproses berkas blob');" +
+                        "  };" +
+                        "  xhr.send();" +
+                        "} catch (e) {" +
+                        "  var bridge = window.AndroidBridge || window.NeoAndroid;" +
+                        "  if (bridge && typeof bridge.showToast === 'function') bridge.showToast('Error unduh blob: ' + e.message);" +
+                        "}" +
+                        "})();"
+                webView.evaluateJavascript(js, null)
+            } else {
+                Toast.makeText(context, "Memproses unduhan berkas...", Toast.LENGTH_SHORT).show()
+            }
+            return
+        }
+
+        // 2. DATA URL
+        if (url.startsWith("data:")) {
+            try {
+                val safeName = guessFileName(url, contentDisposition, mimeType)
+                val commaIdx = url.indexOf(",")
+                if (commaIdx != -1) {
+                    val header = url.substring(0, commaIdx)
+                    val dataPart = url.substring(commaIdx + 1)
+                    val bytes = if (header.contains(";base64")) {
+                        Base64.decode(dataPart, Base64.DEFAULT)
+                    } else {
+                        Uri.decode(dataPart).toByteArray(Charsets.UTF_8)
+                    }
+                    val ok = saveBytesToDownloads(bytes, safeName, mimeType)
+                    if (ok) {
+                        Toast.makeText(context, "Berkas disimpan ke Downloads: $safeName", Toast.LENGTH_LONG).show()
+                    } else {
+                        Toast.makeText(context, "Gagal menyimpan berkas di penyimpanan", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            } catch (t: Throwable) {
+                Toast.makeText(context, "Gagal mengunduh berkas: ${t.message}", Toast.LENGTH_SHORT).show()
+            }
+            return
+        }
+
+        // 3. HTTP / HTTPS URL
+        if (url.startsWith("http://") || url.startsWith("https://")) {
+            try {
+                val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as? DownloadManager
+                if (dm != null) {
+                    val uri = Uri.parse(url)
+                    val fileName = guessFileName(url, contentDisposition, mimeType)
+                    val request = DownloadManager.Request(uri).apply {
+                        setTitle(fileName)
+                        setDescription("Mengunduh dengan $appName")
+                        setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                        setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, fileName)
+                        try {
+                            val cookie = CookieManager.getInstance().getCookie(url)
+                            if (!cookie.isNullOrBlank()) addRequestHeader("Cookie", cookie)
+                        } catch (ignored: Throwable) {}
+                        if (!userAgent.isNullOrBlank()) {
+                            addRequestHeader("User-Agent", userAgent)
+                        }
+                    }
+                    dm.enqueue(request)
+                    Toast.makeText(context, "Mengunduh berkas: $fileName", Toast.LENGTH_SHORT).show()
+                    return
+                }
+            } catch (t: Throwable) {
+                t.printStackTrace()
+            }
+
+            // Fallback: Safe Intent
+            try {
+                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                }
+                context.startActivity(intent)
+            } catch (anfe: ActivityNotFoundException) {
+                Toast.makeText(context, "Tidak ada browser untuk membuka tautan.", Toast.LENGTH_SHORT).show()
+            } catch (t: Throwable) {
+                Toast.makeText(context, "Gagal membuka link: ${t.message}", Toast.LENGTH_SHORT).show()
+            }
+            return
+        }
+
+        // 4. Other schemes
+        try {
+            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+            }
+            context.startActivity(intent)
+        } catch (anfe: ActivityNotFoundException) {
+            Toast.makeText(context, "Tidak ada aplikasi untuk menangani tautan ini.", Toast.LENGTH_SHORT).show()
+        } catch (t: Throwable) {
+            Toast.makeText(context, "Gagal membuka tautan: ${t.message}", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun guessFileName(url: String, contentDisposition: String?, mimeType: String?): String {
+        return try {
+            val guessed = URLUtil.guessFileName(url, contentDisposition, mimeType)
+            if (!guessed.isNullOrBlank() && !guessed.equals("downloadfile", ignoreCase = true)) {
+                guessed
+            } else {
+                "download_${System.currentTimeMillis()}.bin"
+            }
+        } catch (e: Exception) {
+            "download_${System.currentTimeMillis()}.bin"
         }
     }
 

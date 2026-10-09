@@ -704,7 +704,17 @@ function startDownload() {
     alert('Silakan masukkan URL tautan unduhan.');
     return;
   }
-  alert('Memulai unduhan dari: ' + url);
+  var bridge = window.AndroidBridge || window.NeoAndroid;
+  if (bridge && typeof bridge.downloadFile === 'function') {
+    bridge.downloadFile(url, '');
+  } else {
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = '';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  }
 }
             """.trimIndent(),
             Charsets.UTF_8
