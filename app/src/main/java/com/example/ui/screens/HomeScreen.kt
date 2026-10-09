@@ -32,6 +32,7 @@ import com.example.R
 import com.example.data.Project
 import com.example.ui.MainViewModel
 import com.example.ui.theme.*
+import com.example.ui.util.AppLogoHelper
 
 @Composable
 fun HomeScreen(viewModel: MainViewModel) {
@@ -166,8 +167,16 @@ fun HomeScreen(viewModel: MainViewModel) {
                                     modifier = Modifier.fillMaxSize()
                                 )
                             } else {
+                                val themedLogo = remember(proj?.id, proj?.name, proj?.packageName) {
+                                    AppLogoHelper.resolveAppIcon(
+                                        context = context,
+                                        folderName = proj?.folderName,
+                                        appName = proj?.name ?: "NEO DOWNLOADER",
+                                        packageName = proj?.packageName ?: "com.neo.downloader"
+                                    )
+                                }
                                 Image(
-                                    painter = painterResource(id = R.drawable.ic_app_logo),
+                                    bitmap = themedLogo,
                                     contentDescription = "Project Icon",
                                     modifier = Modifier.fillMaxSize()
                                 )
@@ -702,6 +711,15 @@ fun ProjectPickerDialog(
             LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 items(projects) { p ->
                     val isCurrent = p.id == selectedProject?.id
+                    val context = androidx.compose.ui.platform.LocalContext.current
+                    val pIcon = remember(p.id, p.name) {
+                        AppLogoHelper.resolveAppIcon(
+                            context = context,
+                            folderName = p.folderName,
+                            appName = p.name,
+                            packageName = p.packageName
+                        )
+                    }
                     Surface(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -718,9 +736,23 @@ fun ProjectPickerDialog(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
-                            Column {
-                                Text(p.name, fontWeight = FontWeight.Bold, color = TextWhite)
-                                Text(p.packageName, fontSize = 11.sp, color = TextGray)
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Image(
+                                    bitmap = pIcon,
+                                    contentDescription = "Logo ${p.name}",
+                                    modifier = Modifier
+                                        .size(36.dp)
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .border(1.dp, CyberBorder, RoundedCornerShape(8.dp))
+                                )
+                                Column {
+                                    Text(p.name, fontWeight = FontWeight.Bold, color = TextWhite)
+                                    Text(p.packageName, fontSize = 11.sp, color = TextGray)
+                                }
                             }
                             if (isCurrent) {
                                 Icon(Icons.Default.Check, contentDescription = null, tint = NeonCyan)
@@ -751,25 +783,50 @@ fun ProjectSummaryCard(
         colors = CardDefaults.cardColors(containerColor = CyberSurface),
         border = androidx.compose.foundation.BorderStroke(1.dp, CyberBorder)
     ) {
+        val context = androidx.compose.ui.platform.LocalContext.current
+        val projectIcon = remember(project.id, project.name, project.packageName) {
+            AppLogoHelper.resolveAppIcon(
+                context = context,
+                folderName = project.folderName,
+                appName = project.name,
+                packageName = project.packageName
+            )
+        }
+
         Column(modifier = Modifier.padding(16.dp)) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = project.name,
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = TextWhite
+                Row(
+                    modifier = Modifier.weight(1f),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Image(
+                        bitmap = projectIcon,
+                        contentDescription = "Logo ${project.name}",
+                        modifier = Modifier
+                            .size(44.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .border(1.dp, CyberBorder, RoundedCornerShape(10.dp))
                     )
-                    Spacer(modifier = Modifier.height(2.dp))
-                    Text(
-                        text = "${project.packageName} • v${project.versionName}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = NeonCyan
-                    )
+
+                    Column {
+                        Text(
+                            text = project.name,
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = TextWhite
+                        )
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = "${project.packageName} • v${project.versionName}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = NeonCyan
+                        )
+                    }
                 }
 
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

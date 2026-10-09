@@ -31,6 +31,7 @@ import androidx.compose.ui.unit.sp
 import com.example.R
 import com.example.ui.MainViewModel
 import com.example.ui.theme.*
+import com.example.ui.util.AppLogoHelper
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -200,9 +201,17 @@ fun ConfigScreen(viewModel: MainViewModel) {
                                         modifier = Modifier.fillMaxSize()
                                     )
                                 } else {
+                                    val themedLogo = remember(project?.id, appName, packageName) {
+                                        AppLogoHelper.resolveAppIcon(
+                                            context = context,
+                                            folderName = project?.folderName,
+                                            appName = appName,
+                                            packageName = packageName
+                                        )
+                                    }
                                     Image(
-                                        painter = painterResource(id = R.drawable.ic_app_logo),
-                                        contentDescription = "Default Icon",
+                                        bitmap = themedLogo,
+                                        contentDescription = "App Icon",
                                         modifier = Modifier.fillMaxSize()
                                     )
                                 }
@@ -775,16 +784,22 @@ fun PermissionItemRow(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
-        Column(modifier = Modifier.weight(1f).padding(end = 10.dp)) {
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .padding(end = 10.dp)
+        ) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxWidth()
             ) {
                 Text(
                     text = definition.title,
                     fontWeight = FontWeight.Bold,
                     color = TextWhite,
-                    fontSize = 13.sp
+                    fontSize = 13.sp,
+                    modifier = Modifier.weight(1f, fill = false)
                 )
                 if (definition.isSpecialAccess) {
                     Surface(
@@ -794,9 +809,10 @@ fun PermissionItemRow(
                         Text(
                             text = "Khusus",
                             color = androidx.compose.ui.graphics.Color(0xFFFF9100),
-                            fontSize = 9.sp,
+                            fontSize = 9.5.sp,
                             fontWeight = FontWeight.Bold,
-                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+                            maxLines = 1,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                         )
                     }
                 } else if (definition.isRuntime) {
@@ -807,14 +823,15 @@ fun PermissionItemRow(
                         Text(
                             text = "Runtime",
                             color = NeonCyan,
-                            fontSize = 9.sp,
+                            fontSize = 9.5.sp,
                             fontWeight = FontWeight.Bold,
-                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+                            maxLines = 1,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                         )
                     }
                 }
             }
-            Spacer(modifier = Modifier.height(2.dp))
+            Spacer(modifier = Modifier.height(3.dp))
             Text(
                 text = definition.description,
                 style = MaterialTheme.typography.bodySmall,

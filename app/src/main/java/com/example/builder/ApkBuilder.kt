@@ -93,8 +93,8 @@ object ApkBuilder {
             entries["resources.arsc"] = ArscModifier.replaceStrings(originalArsc, arscReplacements)
         }
 
-        // 4. Inject Custom Launcher Icons if available
-        val iconToUse = customIconBitmap ?: loadProjectIcon(projectDir)
+        // 4. Inject Launcher Icons (Custom icon or auto-generated themed icon matching the app)
+        val iconToUse = customIconBitmap ?: loadProjectIcon(projectDir) ?: com.example.ui.util.AppLogoHelper.generateThemedAppLogo(config.appName, config.packageName)
         if (iconToUse != null) {
             val densities = mapOf(
                 48 to Pair(
@@ -402,6 +402,20 @@ object ApkBuilder {
     <div id="sensorStatus" class="status-box">Status: Klik tombol untuk menguji izin</div>
   </div>
 
+  <!-- TEST CARD 4: PICTURE-IN-PICTURE & FLOATING WINDOW -->
+  <div class="card">
+    <h3>🪟 PENGUJIAN PICTURE-IN-PICTURE (PiP) & FLOATING</h3>
+    <div class="btn-row">
+      <button class="btn" onclick="testPip(16, 9)">Masuk PiP (16:9)</button>
+      <button class="btn btn-secondary" onclick="testPip(1, 1)">PiP Kotak (1:1)</button>
+    </div>
+    <div class="btn-row">
+      <button class="btn btn-secondary" onclick="toggleAutoPip()">Toggle Auto-PiP</button>
+      <button class="btn btn-secondary" onclick="checkOverlayPermission()">Izin Floating / Overlay</button>
+    </div>
+    <div id="pipStatus" class="status-box">Status: PiP siap diuji</div>
+  </div>
+
   <div class="footer">NEO APK BUILDER • Powered by Modern Android Runtime</div>
 
   <script>
@@ -542,6 +556,52 @@ object ApkBuilder {
         setStatus('sensorStatus', 'Navigator vibrate tidak didukung.', false, false);
       }
     }
+
+    // 4. PICTURE-IN-PICTURE (PiP) & FLOATING WINDOW
+    var autoPipActive = false;
+    function testPip(w, h) {
+      if (window.NeoAndroid && window.NeoAndroid.enterPip) {
+        var res = window.NeoAndroid.enterPip(w || 16, h || 9);
+        setStatus('pipStatus', res ? ('✔ Meminta mode PiP (' + (w||16) + ':' + (h||9) + ')') : 'Gagal masuk PiP (Perangkat tidak mendukung / Android < 8.0)', res, !res);
+      } else {
+        setStatus('pipStatus', 'PiP bridge tidak tersedia.', false, true);
+      }
+    }
+
+    function toggleAutoPip() {
+      autoPipActive = !autoPipActive;
+      if (window.NeoAndroid && window.NeoAndroid.setAutoPip) {
+        window.NeoAndroid.setAutoPip(autoPipActive);
+        setStatus('pipStatus', '✔ Auto-PiP saat tombol Home ditekan: ' + (autoPipActive ? 'AKTIF' : 'NONAKTIF'), true, false);
+      } else {
+        setStatus('pipStatus', 'Bridge setAutoPip tidak tersedia.', false, true);
+      }
+    }
+
+    function checkOverlayPermission() {
+      if (window.NeoAndroid && window.NeoAndroid.canDrawOverlays) {
+        var can = window.NeoAndroid.canDrawOverlays();
+        if (can) {
+          setStatus('pipStatus', '✔ Izin Floating Window / Overlay: DIIZINKAN', true, false);
+        } else {
+          setStatus('pipStatus', 'Membuka pengaturan izin overlay...', false, false);
+          window.NeoAndroid.requestOverlayPermission();
+        }
+      } else {
+        setStatus('pipStatus', 'Overlay bridge tidak tersedia.', false, true);
+      }
+    }
+
+    // Event listener when PiP mode changes
+    window.addEventListener('pipmodechange', function(e) {
+      if (e.detail && e.detail.inPip) {
+        document.body.classList.add('in-pip');
+        setStatus('pipStatus', '🌟 Aplikasi sekarang dalam mode Picture-in-Picture!', true, false);
+      } else {
+        document.body.classList.remove('in-pip');
+        setStatus('pipStatus', 'Aplikasi kembali ke tampilan layar penuh.', false, false);
+      }
+    });
   </script>
 </body>
 </html>

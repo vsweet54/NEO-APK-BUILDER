@@ -48,6 +48,7 @@ import com.example.data.WebProjectFile
 import com.example.ui.MainViewModel
 import com.example.ui.components.RealEsrganDialog
 import com.example.ui.theme.*
+import com.example.ui.util.AppLogoHelper
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -1368,39 +1369,22 @@ fun ProjectListItemCard(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                val projectIcon: ImageBitmap? = remember(project.id, project.updatedAt) {
-                    val pDir = java.io.File(cardContext.filesDir, "projects/${project.folderName}")
-                    val possible = listOf("icon.png", "icon.jpg", "icon.jpeg", "logo.png", "logo.jpg", "app_logo.png")
-                    val iconFile = possible.map { java.io.File(pDir, it) }.firstOrNull { it.exists() }
-                    if (iconFile != null) {
-                        try {
-                            BitmapFactory.decodeFile(iconFile.absolutePath)?.asImageBitmap()
-                        } catch (e: Exception) {
-                            null
-                        }
-                    } else {
-                        null
-                    }
-                }
-                if (projectIcon != null) {
-                    Image(
-                        bitmap = projectIcon,
-                        contentDescription = "Project Icon",
-                        modifier = Modifier
-                            .size(46.dp)
-                            .clip(RoundedCornerShape(10.dp))
-                            .border(1.dp, if (isCurrent) NeonCyan else CyberBorder, RoundedCornerShape(10.dp))
-                    )
-                } else {
-                    Image(
-                        painter = painterResource(id = R.drawable.ic_app_logo),
-                        contentDescription = "Project Icon",
-                        modifier = Modifier
-                            .size(46.dp)
-                            .clip(RoundedCornerShape(10.dp))
-                            .border(1.dp, if (isCurrent) NeonCyan else CyberBorder, RoundedCornerShape(10.dp))
+                val projectIcon: ImageBitmap = remember(project.id, project.updatedAt, project.name) {
+                    AppLogoHelper.resolveAppIcon(
+                        context = cardContext,
+                        folderName = project.folderName,
+                        appName = project.name,
+                        packageName = project.packageName
                     )
                 }
+                Image(
+                    bitmap = projectIcon,
+                    contentDescription = "Logo ${project.name}",
+                    modifier = Modifier
+                        .size(46.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .border(1.dp, if (isCurrent) NeonCyan else CyberBorder, RoundedCornerShape(10.dp))
+                )
 
                 Column(modifier = Modifier.weight(1f)) {
                     Row(

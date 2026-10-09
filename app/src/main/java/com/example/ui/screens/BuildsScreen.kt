@@ -1,5 +1,6 @@
 package com.example.ui.screens
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
@@ -12,7 +13,9 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -20,6 +23,7 @@ import androidx.compose.ui.unit.sp
 import com.example.data.BuildHistoryItem
 import com.example.ui.MainViewModel
 import com.example.ui.theme.*
+import com.example.ui.util.AppLogoHelper
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -132,40 +136,65 @@ fun BuildItemCard(
         colors = CardDefaults.cardColors(containerColor = CyberSurface),
         border = androidx.compose.foundation.BorderStroke(1.dp, CyberBorder)
     ) {
+        val context = LocalContext.current
+        val appLogo = remember(item.id, item.apkPath, item.appName) {
+            AppLogoHelper.resolveAppIcon(
+                context = context,
+                appName = item.appName,
+                packageName = item.packageName,
+                apkPath = item.apkPath
+            )
+        }
+
         Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(18.dp)
         ) {
-            // Header Row: App Name and Ready tag
+            // Header Row: App Logo, App Name, and Ready tag
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.Top,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = item.appName,
-                        fontWeight = FontWeight.Black,
-                        color = TextWhite,
-                        fontSize = 17.sp,
-                        letterSpacing = 0.5.sp
+                Row(
+                    modifier = Modifier.weight(1f),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(14.dp)
+                ) {
+                    Image(
+                        bitmap = appLogo,
+                        contentDescription = "Logo ${item.appName}",
+                        modifier = Modifier
+                            .size(50.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .border(1.dp, CyberBorder, RoundedCornerShape(12.dp))
                     )
-                    Spacer(modifier = Modifier.height(2.dp))
-                    Text(
-                        text = "${item.packageName} • v${item.versionName}",
-                        color = NeonCyanDim,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Medium
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    val dateFormat = SimpleDateFormat("dd MMM yyyy, HH:mm", Locale("id", "ID"))
-                    val dateStr = dateFormat.format(Date(item.buildTimestamp))
-                    Text(
-                        text = "$dateStr • ${formatFileSize(item.fileSizeBytes)}",
-                        color = TextGray,
-                        fontSize = 12.sp
-                    )
+
+                    Column {
+                        Text(
+                            text = item.appName,
+                            fontWeight = FontWeight.Black,
+                            color = TextWhite,
+                            fontSize = 17.sp,
+                            letterSpacing = 0.5.sp
+                        )
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = "${item.packageName} • v${item.versionName}",
+                            color = NeonCyanDim,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        val dateFormat = SimpleDateFormat("dd MMM yyyy, HH:mm", Locale("id", "ID"))
+                        val dateStr = dateFormat.format(Date(item.buildTimestamp))
+                        Text(
+                            text = "$dateStr • ${formatFileSize(item.fileSizeBytes)}",
+                            color = TextGray,
+                            fontSize = 12.sp
+                        )
+                    }
                 }
 
                 Surface(
