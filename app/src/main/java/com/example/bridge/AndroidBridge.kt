@@ -53,8 +53,24 @@ import java.util.concurrent.Executors
 class AndroidBridge(
     private val context: Context,
     private val appName: String = "NEO App",
-    private val packageName: String = "com.neo.app"
+    private val packageName: String = "com.neo.app",
+    private val folderPrimary: String = "Neo Downloader",
+    private val allowedSubfolders: String = "mp4, mp3",
+    private val showToastOnFinish: Boolean = true
 ) {
+
+    private val activeSaveSessions = java.util.concurrent.ConcurrentHashMap<String, DownloadSaveSession>()
+
+    class DownloadSaveSession(
+        val saveId: String,
+        val subfolder: String,
+        val sanitizedName: String,
+        val mimeType: String,
+        val outputStream: java.io.OutputStream,
+        val mediaStoreUri: Uri?,
+        val targetFile: File?,
+        val relativeDisplayPath: String
+    )
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private val ioExecutor = Executors.newFixedThreadPool(4)
@@ -731,11 +747,189 @@ class AndroidBridge(
                 put("pipSupported", isPipSupported())
                 put("overlaySupported", true)
                 put("realEsrganSupported", true)
+                put("downloadBridgeSupported", true)
+                put("primaryFolder", folderPrimary)
                 put("version", "2.1-Pro")
             }
             json.toString()
         } catch (e: Exception) {
             "{}"
+        }
+    }
+
+    // ==================== MEDIASTORE DOWNLOAD BRIDGE (SUBFOLDER STORAGE) ====================
+
+    private fun isSubfolderAllowed(subfolder: String?): Boolean {
+        if (subfolder.isNullOrBlank()) return false
+        val clean = subfolder.trim().lowercase()
+        val configured = allowedSubfolders.split(",")
+            .map { it.trim().lowercase() }
+            .filter { it.isNotEmpty() }
+            .toSet()
+        val validSet = if (configured.isEmpty()) setOf("mp4", "mp3") else configured
+        return validSet.contains(clean)
+    }
+
+    private fun sanitizeFileName(filename: String?): String {
+        if (filename.isNullOrBlank()) return "file_${System.currentTimeMillis()}"
+        var name = filename.replace("\\", "/").trim()
+        name = name.substringAfterLast("/")
+        name = name.replace("..", "_")
+        name = name.replace("[/\\\\:*?\"<>|]".toRegex(), "_")
+        if (name.isBlank() || name == "." || name == "_") {
+            name = "file_${System.currentTimeMillis()}"
+        }
+        return name
+    }
+
+    @JavascriptInterface
+    fun beginSave(subfolder: String?, filename: String?, mimeType: String?): String {
+        return try {
+            val sub = subfolder?.trim()?.lowercase() ?: ""
+            if (!isSubfolderAllowed(sub)) {
+                return "ERROR: Subfolder tidak diizinkan. Hanya 'mp4' atau 'mp3' yang diterima."
+            }
+
+            var safeName = sanitizeFileName(filename)
+            val effMime = if (mimeType.isNullOrBlank()) {
+                if (sub == "mp4") "video/mp4" else if (sub == "mp3") "audio/mpeg" else "application/octet-stream"
+            } else {
+                mimeType.trim()
+            }
+
+            // Ensure valid extension for subfolder
+            if (sub == "mp4" && !safeName.lowercase().endsWith(".mp4")) {
+                safeName = if (safeName.contains(".")) safeName.substringBeforeLast(".") + ".mp4" else "$safeName.mp4"
+            } else if (sub == "mp3" && !safeName.lowercase().endsWith(".mp3")) {
+                safeName = if (safeName.contains(".")) safeName.substringBeforeLast(".") + ".mp3" else "$safeName.mp3"
+            }
+
+            val primary = if (folderPrimary.isNotBlank()) folderPrimary.trim() else "Neo Downloader"
+            val relativeDir = "Download/$primary/$sub"
+            val saveId = "save_" + System.currentTimeMillis() + "_" + java.util.UUID.randomUUID().toString().substring(0, 8)
+
+            // Android 10+ (API 29+): MediaStore scoped storage with relative path
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                try {
+                    val resolver = context.contentResolver
+                    val values = ContentValues().apply {
+                        put(MediaStore.Downloads.DISPLAY_NAME, safeName)
+                        put(MediaStore.Downloads.MIME_TYPE, effMime)
+                        put(MediaStore.Downloads.RELATIVE_PATH, "$relativeDir/")
+                        put(MediaStore.Downloads.IS_PENDING, 1)
+                    }
+
+                    val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                    if (uri != null) {
+                        val os = resolver.openOutputStream(uri)
+                        if (os != null) {
+                            val session = DownloadSaveSession(
+                                saveId = saveId,
+                                subfolder = sub,
+                                sanitizedName = safeName,
+                                mimeType = effMime,
+                                outputStream = os,
+                                mediaStoreUri = uri,
+                                targetFile = null,
+                                relativeDisplayPath = "$relativeDir/$safeName"
+                            )
+                            activeSaveSessions[saveId] = session
+                            return saveId
+                        }
+                    }
+                } catch (ignored: Throwable) {
+                    // Fall back to direct public storage
+                }
+            }
+
+            // Android 9 and below: Direct public downloads storage
+            val baseDownloads = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+            val targetDir = File(File(baseDownloads, primary), sub)
+            if (!targetDir.exists()) {
+                targetDir.mkdirs()
+            }
+
+            var destFile = File(targetDir, safeName)
+            if (destFile.exists()) {
+                val base = destFile.nameWithoutExtension
+                val ext = if (destFile.extension.isNotBlank()) "." + destFile.extension else ""
+                destFile = File(targetDir, "${base}_${System.currentTimeMillis()}$ext")
+            }
+
+            val fos = FileOutputStream(destFile)
+            val session = DownloadSaveSession(
+                saveId = saveId,
+                subfolder = sub,
+                sanitizedName = destFile.name,
+                mimeType = effMime,
+                outputStream = fos,
+                mediaStoreUri = null,
+                targetFile = destFile,
+                relativeDisplayPath = "$relativeDir/${destFile.name}"
+            )
+            activeSaveSessions[saveId] = session
+            saveId
+        } catch (t: Throwable) {
+            t.printStackTrace()
+            "ERROR: " + (t.message ?: "Terjadi kesalahan inisialisasi penyimpanan berkas")
+        }
+    }
+
+    @JavascriptInterface
+    fun appendChunk(saveId: String?, base64Chunk: String?): Boolean {
+        if (saveId.isNullOrBlank() || base64Chunk == null) return false
+        val session = activeSaveSessions[saveId] ?: return false
+
+        return try {
+            val clean = if (base64Chunk.contains(",")) base64Chunk.substringAfter(",") else base64Chunk
+            val bytes = Base64.decode(clean, Base64.DEFAULT)
+            if (bytes.isNotEmpty()) {
+                session.outputStream.write(bytes)
+                session.outputStream.flush()
+            }
+            true
+        } catch (t: Throwable) {
+            t.printStackTrace()
+            false
+        }
+    }
+
+    @JavascriptInterface
+    fun finishSave(saveId: String?): String {
+        if (saveId.isNullOrBlank()) return "ERROR: saveId kosong"
+        val session = activeSaveSessions.remove(saveId) ?: return "ERROR: Sesi simpan tidak ditemukan atau sudah selesai"
+
+        return try {
+            try {
+                session.outputStream.flush()
+                session.outputStream.close()
+            } catch (ignored: Throwable) {}
+
+            var finalPath = session.relativeDisplayPath
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && session.mediaStoreUri != null) {
+                val resolver = context.contentResolver
+                val values = ContentValues().apply {
+                    put(MediaStore.Downloads.IS_PENDING, 0)
+                }
+                resolver.update(session.mediaStoreUri, values, null, null)
+                notifyMediaScanner(finalPath)
+            } else if (session.targetFile != null) {
+                notifyMediaScanner(session.targetFile.absolutePath)
+                finalPath = session.relativeDisplayPath
+            }
+
+            val finalFolderDesc = "Download/${if (folderPrimary.isNotBlank()) folderPrimary.trim() else "Neo Downloader"}/${session.subfolder}"
+            if (showToastOnFinish) {
+                mainHandler.post {
+                    Toast.makeText(context, "Tersimpan di $finalFolderDesc", Toast.LENGTH_LONG).show()
+                }
+            }
+
+            finalPath
+        } catch (t: Throwable) {
+            t.printStackTrace()
+            "ERROR: " + (t.message ?: "Gagal menyelesaikan penulisan berkas")
         }
     }
 }

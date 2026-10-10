@@ -42,6 +42,16 @@ object PermissionManager {
             isRuntime = false,
             defaultEnabled = true
         ),
+        // 2b. Write External Storage (Android 9 ke bawah)
+        PermissionDefinition(
+            id = "WRITE_EXTERNAL_STORAGE",
+            title = "Penyimpanan Publik (Android 9 ke bawah)",
+            description = "Menyimpan file ke unduhan publik (WRITE_EXTERNAL_STORAGE dengan maxSdkVersion 28)",
+            manifestPermissions = listOf("android.permission.WRITE_EXTERNAL_STORAGE"),
+            category = PermissionCategory.MEDIA_SENSORS,
+            isRuntime = true,
+            defaultEnabled = true
+        ),
         // 3. Kamera
         PermissionDefinition(
             id = "CAMERA",
@@ -208,7 +218,7 @@ object PermissionManager {
     }
 
     fun parsePermissions(raw: String?): Set<String> {
-        if (raw.isNullOrBlank()) return setOf("INTERNET", "ACCESS_NETWORK_STATE", "VIBRATE")
+        if (raw.isNullOrBlank()) return setOf("INTERNET", "ACCESS_NETWORK_STATE", "WRITE_EXTERNAL_STORAGE", "VIBRATE")
         return raw.split(",")
             .map { it.trim() }
             .filter { it.isNotEmpty() }

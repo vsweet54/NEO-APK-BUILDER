@@ -78,6 +78,10 @@ object ApkBuilder {
           "fullscreen": ${config.fullscreen},
           "nativeBridge": ${config.nativeBridge},
           "domStorage": ${config.domStorage},
+          "enableDownloadBridge": ${config.enableDownloadBridge},
+          "downloadFolderPrimary": "${config.downloadFolderPrimary.replace("\"", "\\\"")}",
+          "downloadSubfolders": "${config.downloadSubfolders.replace("\"", "\\\"")}",
+          "showDownloadToast": ${config.showDownloadToast},
           "aiEnabled": true,
           "realEsrganEngine": "native_and_offline_runtime"
         }
@@ -388,6 +392,21 @@ object ApkBuilder {
     <div id="fileStatus" class="status-box">Status: Belum ada berkas dipilih</div>
   </div>
 
+  <!-- TEST CARD 2B: MEDIASTORE DOWNLOAD BRIDGE (MP4 & MP3) -->
+  <div class="card">
+    <h3>📥 MEDIASTORE DOWNLOAD BRIDGE (MP4 & MP3)</h3>
+    <p style="font-size: 12px; color: #A0B2C6; margin-bottom: 10px;">Simpan video MP4 dan audio MP3 langsung ke subfolder unduhan publik via native AndroidBridge:</p>
+    <div class="btn-row">
+      <button class="btn" onclick="testSaveMedia('mp4')">Simpan Contoh MP4</button>
+      <button class="btn btn-secondary" onclick="testSaveMedia('mp3')">Simpan Contoh MP3</button>
+    </div>
+    <div class="btn-row">
+      <button class="btn btn-secondary" onclick="testLargeChunkStream()">Uji Multi-Chunk Streaming</button>
+      <button class="btn btn-secondary" onclick="checkBridgeStatus()">Cek Status Bridge</button>
+    </div>
+    <div id="bridgeStatus" class="status-box">Status Bridge: Siap diuji</div>
+  </div>
+
   <!-- TEST CARD 3: HARDWARE & SENSORS -->
   <div class="card">
     <h3>⚙️ PENGUJIAN IZIN & SENSOR PERANGKAT</h3>
@@ -504,6 +523,76 @@ object ApkBuilder {
       } else {
         setStatus('fileStatus', 'Native file save bridge tidak tersedia.', false, true);
       }
+    }
+
+    // 2B. MEDIASTORE DOWNLOAD BRIDGE (MP4 & MP3)
+    function checkBridgeStatus() {
+      var bridge = window.AndroidBridge || window.NeoBridge || null;
+      var avail = bridge && typeof bridge.isAvailable === 'function' ? bridge.isAvailable() : false;
+      setStatus('bridgeStatus', avail ? '✔ AndroidBridge AKTIF & TERSEDIA' : 'AndroidBridge tidak terdeteksi (periksa toggle di builder)', avail, !avail);
+    }
+
+    function testSaveMedia(subfolder) {
+      var bridge = window.AndroidBridge || window.NeoBridge;
+      if (!bridge || typeof bridge.beginSave !== 'function') {
+        setStatus('bridgeStatus', 'Native AndroidBridge.beginSave tidak tersedia.', false, true);
+        return;
+      }
+      var isMp4 = subfolder === 'mp4';
+      var filename = isMp4 ? ('Neo_video_' + Date.now() + '.mp4') : ('Neo_audio_' + Date.now() + '.mp3');
+      var mimeType = isMp4 ? 'video/mp4' : 'audio/mpeg';
+      setStatus('bridgeStatus', 'Memulai beginSave untuk ' + filename + '...');
+
+      var saveId = bridge.beginSave(subfolder, filename, mimeType);
+      if (!saveId || saveId.indexOf('ERROR:') === 0) {
+        setStatus('bridgeStatus', 'Gagal beginSave: ' + saveId, false, true);
+        return;
+      }
+
+      var dummyData = 'Simulated ' + subfolder.toUpperCase() + ' binary content stream header and frames for testing native bridge.';
+      var b64Chunk = btoa(dummyData);
+      var appendOk = bridge.appendChunk(saveId, b64Chunk);
+      if (!appendOk) {
+        setStatus('bridgeStatus', 'Gagal appendChunk untuk saveId: ' + saveId, false, true);
+        return;
+      }
+
+      var finalPath = bridge.finishSave(saveId);
+      if (!finalPath || finalPath.indexOf('ERROR:') === 0) {
+        setStatus('bridgeStatus', 'Gagal finishSave: ' + finalPath, false, true);
+      } else {
+        setStatus('bridgeStatus', '✔ Berhasil tersimpan: ' + finalPath, true, false);
+      }
+    }
+
+    function testLargeChunkStream() {
+      var bridge = window.AndroidBridge || window.NeoBridge;
+      if (!bridge || typeof bridge.beginSave !== 'function') {
+        setStatus('bridgeStatus', 'Native AndroidBridge tidak tersedia.', false, true);
+        return;
+      }
+      var filename = 'Neo_stream_' + Date.now() + '.mp4';
+      var saveId = bridge.beginSave('mp4', filename, 'video/mp4');
+      if (!saveId || saveId.indexOf('ERROR:') === 0) {
+        setStatus('bridgeStatus', 'Gagal beginSave: ' + saveId, false, true);
+        return;
+      }
+
+      var pattern = '0123456789ABCDEF'.repeat(64);
+      var b64 = btoa(pattern);
+      var allOk = true;
+      for (var i = 0; i < 5; i++) {
+        if (!bridge.appendChunk(saveId, b64)) {
+          allOk = false;
+          break;
+        }
+      }
+      if (!allOk) {
+        setStatus('bridgeStatus', 'Gagal salah satu chunk', false, true);
+        return;
+      }
+      var res = bridge.finishSave(saveId);
+      setStatus('bridgeStatus', '✔ Streaming 5 Chunks Selesai: ' + res, true, false);
     }
 
     // 3. SENSOR & PERMISSIONS TESTS
@@ -636,12 +725,24 @@ object ApkBuilder {
   'use strict';
 
   // Discover native Java bridge objects injected via WebView.addJavascriptInterface
-  const native = (window.AndroidBridge && typeof window.AndroidBridge.showToast === 'function' ? window.AndroidBridge : null) ||
-                 (window.NeoAndroid && typeof window.NeoAndroid.showToast === 'function' ? window.NeoAndroid : null);
+  const rawAndroidBridge = window.AndroidBridge || null;
+  const rawNeoAndroid = window.NeoAndroid || null;
+
+  const mainNative = (rawNeoAndroid && typeof rawNeoAndroid.showToast === 'function' ? rawNeoAndroid : null) ||
+                     (rawAndroidBridge && typeof rawAndroidBridge.showToast === 'function' ? rawAndroidBridge : null);
+  const dlNative = (rawAndroidBridge && typeof rawAndroidBridge.beginSave === 'function' ? rawAndroidBridge : null) ||
+                   (rawNeoAndroid && typeof rawNeoAndroid.beginSave === 'function' ? rawNeoAndroid : null);
+  const native = mainNative || dlNative;
 
   const NeoBridge = {
     isAvailable: function() {
-      return native !== null;
+      if (rawAndroidBridge && typeof rawAndroidBridge.isAvailable === 'function') {
+        return rawAndroidBridge.isAvailable();
+      }
+      if (rawNeoAndroid && typeof rawNeoAndroid.isAvailable === 'function') {
+        return rawNeoAndroid.isAvailable();
+      }
+      return (rawAndroidBridge !== null || rawNeoAndroid !== null);
     },
     showToast: function(msg) {
       if (native && typeof native.showToast === 'function') {
@@ -682,6 +783,27 @@ object ApkBuilder {
         return native.saveFile(base64Data, fileName, mimeType || 'application/octet-stream');
       }
       return false;
+    },
+    beginSave: function(subfolder, filename, mimeType) {
+      const b = (rawAndroidBridge && typeof rawAndroidBridge.beginSave === 'function' ? rawAndroidBridge : null) || dlNative;
+      if (b && typeof b.beginSave === 'function') {
+        return b.beginSave(String(subfolder), String(filename), mimeType ? String(mimeType) : '');
+      }
+      return 'ERROR: Native bridge beginSave not available';
+    },
+    appendChunk: function(saveId, base64Chunk) {
+      const b = (rawAndroidBridge && typeof rawAndroidBridge.appendChunk === 'function' ? rawAndroidBridge : null) || dlNative;
+      if (b && typeof b.appendChunk === 'function') {
+        return b.appendChunk(String(saveId), String(base64Chunk));
+      }
+      return false;
+    },
+    finishSave: function(saveId) {
+      const b = (rawAndroidBridge && typeof rawAndroidBridge.finishSave === 'function' ? rawAndroidBridge : null) || dlNative;
+      if (b && typeof b.finishSave === 'function') {
+        return b.finishSave(String(saveId));
+      }
+      return 'ERROR: Native bridge finishSave not available';
     },
     enterPip: function(aspectWidth, aspectHeight) {
       if (native && typeof native.enterPip === 'function') {
@@ -771,12 +893,28 @@ object ApkBuilder {
     }
   };
 
-  // Expose global namespaces
-  if (!window.AndroidBridge || typeof window.AndroidBridge.showToast !== 'function') {
+  // Expose global namespaces without clobbering existing native interfaces
+  window.NeoBridge = NeoBridge;
+  window.neo = window.neo || NeoBridge;
+
+  if (!window.AndroidBridge) {
     window.AndroidBridge = NeoBridge;
+  } else {
+    for (const k in NeoBridge) {
+      if (typeof window.AndroidBridge[k] === 'undefined') {
+        try { window.AndroidBridge[k] = NeoBridge[k]; } catch(e) {}
+      }
+    }
   }
-  if (!window.NeoAndroid || typeof window.NeoAndroid.showToast !== 'function') {
+
+  if (!window.NeoAndroid) {
     window.NeoAndroid = NeoBridge;
+  } else {
+    for (const k in NeoBridge) {
+      if (typeof window.NeoAndroid[k] === 'undefined') {
+        try { window.NeoAndroid[k] = NeoBridge[k]; } catch(e) {}
+      }
+    }
   }
   window.NeoAI = window.NeoAI || {
     upscale4K: NeoBridge.upscaleImage4K,

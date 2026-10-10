@@ -247,4 +247,87 @@ class ExampleRobolectricTest {
 
         testProjectDir.deleteRecursively()
     }
+
+    @Test
+    fun `test AndroidBridge beginSave appendChunk finishSave contract`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val bridge = com.example.bridge.AndroidBridge(
+            context = context,
+            appName = "Neo Downloader Test",
+            packageName = "com.neo.downloader",
+            folderPrimary = "Neo Downloader",
+            allowedSubfolders = "mp4, mp3",
+            showToastOnFinish = true
+        )
+
+        assertTrue("isAvailable must return true", bridge.isAvailable())
+
+        // 1. Test MP4 small save
+        val saveId = bridge.beginSave("mp4", "Neo_video_123.mp4", "video/mp4")
+        assertFalse("beginSave should not return error for valid mp4", saveId.startsWith("ERROR:"))
+        assertTrue("saveId should have prefix save_", saveId.startsWith("save_"))
+
+        val chunk1 = android.util.Base64.encodeToString("MP4_CHUNK_1".toByteArray(), android.util.Base64.NO_WRAP)
+        val chunk2 = android.util.Base64.encodeToString("MP4_CHUNK_2".toByteArray(), android.util.Base64.NO_WRAP)
+        assertTrue(bridge.appendChunk(saveId, chunk1))
+        assertTrue(bridge.appendChunk(saveId, chunk2))
+
+        val finishResult = bridge.finishSave(saveId)
+        assertFalse("finishSave should not return error", finishResult.startsWith("ERROR:"))
+        assertEquals("Download/Neo Downloader/mp4/Neo_video_123.mp4", finishResult)
+
+        // 2. Test MP3 small save
+        val mp3Id = bridge.beginSave("mp3", "Neo_audio_456.mp3", "audio/mpeg")
+        assertFalse("beginSave should not return error for valid mp3", mp3Id.startsWith("ERROR:"))
+        val mp3Chunk = android.util.Base64.encodeToString("MP3_SAMPLE_DATA".toByteArray(), android.util.Base64.NO_WRAP)
+        assertTrue(bridge.appendChunk(mp3Id, mp3Chunk))
+        val mp3Result = bridge.finishSave(mp3Id)
+        assertEquals("Download/Neo Downloader/mp3/Neo_audio_456.mp3", mp3Result)
+
+        // 3. Test invalid subfolder rejection (only mp4 and mp3 permitted)
+        val badSubfolderResult = bridge.beginSave("apk", "unauthorized.apk", "application/vnd.android.package-archive")
+        assertTrue("Invalid subfolder must be rejected with ERROR:", badSubfolderResult.startsWith("ERROR:"))
+
+        val badSubfolderResult2 = bridge.beginSave("exe", "bad.exe", "application/x-msdownload")
+        assertTrue("Invalid subfolder must be rejected with ERROR:", badSubfolderResult2.startsWith("ERROR:"))
+
+        // 4. Test path traversal sanitization in filename
+        val traversalId = bridge.beginSave("mp4", "../../nested/escape.mp4", "video/mp4")
+        assertFalse(traversalId.startsWith("ERROR:"))
+        val traversalResult = bridge.finishSave(traversalId)
+        assertFalse("Result path must not contain traversal dots", traversalResult.contains(".."))
+        assertTrue("Result path must stay within target directory", traversalResult.startsWith("Download/Neo Downloader/mp4/"))
+
+        // 5. Test large file multi-chunk streaming simulation
+        val largeId = bridge.beginSave("mp4", "large_video_50mb.mp4", "video/mp4")
+        assertFalse(largeId.startsWith("ERROR:"))
+        val sample500kb = ByteArray(500 * 1024) { (it % 256).toByte() }
+        val b64Chunk = android.util.Base64.encodeToString(sample500kb, android.util.Base64.NO_WRAP)
+        for (i in 0 until 10) {
+            assertTrue("appendChunk should succeed for large chunks", bridge.appendChunk(largeId, b64Chunk))
+        }
+        val largeResult = bridge.finishSave(largeId)
+        assertEquals("Download/Neo Downloader/mp4/large_video_50mb.mp4", largeResult)
+    }
+
+    @Test
+    fun `test AndroidBridge with custom primary folder`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val bridge = com.example.bridge.AndroidBridge(
+            context = context,
+            appName = "Custom App",
+            packageName = "com.custom.app",
+            folderPrimary = "My Custom Downloads",
+            allowedSubfolders = "mp4, mp3",
+            showToastOnFinish = false
+        )
+
+        val id = bridge.beginSave("mp4", "custom_video.mp4", "video/mp4")
+        assertFalse(id.startsWith("ERROR:"))
+        val chunk = android.util.Base64.encodeToString("test_bytes".toByteArray(), android.util.Base64.NO_WRAP)
+        assertTrue(bridge.appendChunk(id, chunk))
+        val result = bridge.finishSave(id)
+        assertEquals("Download/My Custom Downloads/mp4/custom_video.mp4", result)
+    }
 }
+

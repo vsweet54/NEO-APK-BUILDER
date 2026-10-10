@@ -53,6 +53,10 @@ fun ConfigScreen(viewModel: MainViewModel) {
     var fullscreen by remember(project) { mutableStateOf(project?.fullscreen ?: false) }
     var nativeBridge by remember(project) { mutableStateOf(project?.nativeBridge ?: true) }
     var domStorage by remember(project) { mutableStateOf(project?.domStorage ?: true) }
+    var enableDownloadBridge by remember(project) { mutableStateOf(project?.enableDownloadBridge ?: true) }
+    var downloadFolderPrimary by remember(project) { mutableStateOf(project?.downloadFolderPrimary ?: "Neo Downloader") }
+    var downloadSubfolders by remember(project) { mutableStateOf(project?.downloadSubfolders ?: "mp4, mp3") }
+    var showDownloadToast by remember(project) { mutableStateOf(project?.showDownloadToast ?: true) }
 
     // Permissions state powered by PermissionManager
     var selectedPermissions by remember(project) {
@@ -94,7 +98,11 @@ fun ConfigScreen(viewModel: MainViewModel) {
             buildType = buildType,
             nativeBridge = nativeBridge,
             domStorage = domStorage,
-            permissions = permsString
+            permissions = permsString,
+            enableDownloadBridge = enableDownloadBridge,
+            downloadFolderPrimary = downloadFolderPrimary,
+            downloadSubfolders = downloadSubfolders,
+            showDownloadToast = showDownloadToast
         )
         Toast.makeText(context, "Konfigurasi berhasil disimpan!", Toast.LENGTH_SHORT).show()
     }
@@ -561,6 +569,66 @@ fun ConfigScreen(viewModel: MainViewModel) {
                             checked = domStorage,
                             onCheckedChange = { domStorage = it }
                         )
+
+                        HorizontalDivider(color = CyberBorder, modifier = Modifier.padding(vertical = 4.dp))
+
+                        // Download Bridge (MediaStore)
+                        SwitchSettingRow(
+                            title = "Aktifkan Download Bridge (MediaStore)",
+                            subtitle = "Native MediaStore bridge untuk menyimpan file ke folder Download dan subfolder publik",
+                            checked = enableDownloadBridge,
+                            onCheckedChange = { enableDownloadBridge = it }
+                        )
+
+                        if (enableDownloadBridge) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .background(CyberSurfaceVariant, RoundedCornerShape(12.dp))
+                                    .padding(14.dp),
+                                verticalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                Text(
+                                    text = "PENGATURAN FOLDER MEDIASTORE",
+                                    fontWeight = FontWeight.Bold,
+                                    color = NeonCyan,
+                                    fontSize = 11.sp,
+                                    letterSpacing = 0.5.sp
+                                )
+
+                                OutlinedTextField(
+                                    value = downloadFolderPrimary,
+                                    onValueChange = { downloadFolderPrimary = it },
+                                    label = { Text("Nama folder utama") },
+                                    placeholder = { Text("Neo Downloader") },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    singleLine = true
+                                )
+
+                                OutlinedTextField(
+                                    value = downloadSubfolders,
+                                    onValueChange = { downloadSubfolders = it },
+                                    label = { Text("Subfolder") },
+                                    placeholder = { Text("mp4, mp3") },
+                                    supportingText = {
+                                        Text(
+                                            "Subfolder yang diizinkan (dipisah koma): mp4, mp3",
+                                            fontSize = 11.sp,
+                                            color = TextGray
+                                        )
+                                    },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    singleLine = true
+                                )
+
+                                SwitchSettingRow(
+                                    title = "Tampilkan Toast setelah simpan",
+                                    subtitle = "Contoh: \"Tersimpan di Download/$downloadFolderPrimary/mp4\"",
+                                    checked = showDownloadToast,
+                                    onCheckedChange = { showDownloadToast = it }
+                                )
+                            }
+                        }
                     }
                 }
             }

@@ -24,7 +24,11 @@ data class Project(
     val buildType: String = "release",
     val nativeBridge: Boolean = true,
     val domStorage: Boolean = true,
-    val permissions: String = "INTERNET,ACCESS_NETWORK_STATE,VIBRATE"
+    val permissions: String = "INTERNET,ACCESS_NETWORK_STATE,VIBRATE",
+    val enableDownloadBridge: Boolean = true,
+    val downloadFolderPrimary: String = "Neo Downloader",
+    val downloadSubfolders: String = "mp4, mp3",
+    val showDownloadToast: Boolean = true
 )
 
 data class ProjectConfig(
@@ -40,7 +44,11 @@ data class ProjectConfig(
     val buildType: String = "release",
     val nativeBridge: Boolean = true,
     val domStorage: Boolean = true,
-    val permissions: String = "INTERNET,ACCESS_NETWORK_STATE,VIBRATE"
+    val permissions: String = "INTERNET,ACCESS_NETWORK_STATE,VIBRATE",
+    val enableDownloadBridge: Boolean = true,
+    val downloadFolderPrimary: String = "Neo Downloader",
+    val downloadSubfolders: String = "mp4, mp3",
+    val showDownloadToast: Boolean = true
 )
 
 @Entity(tableName = "build_history")

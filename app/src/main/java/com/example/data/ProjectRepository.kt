@@ -324,7 +324,11 @@ class ProjectRepository(private val context: Context) {
             buildType = project.buildType,
             nativeBridge = project.nativeBridge,
             domStorage = project.domStorage,
-            permissions = project.permissions
+            permissions = project.permissions,
+            enableDownloadBridge = project.enableDownloadBridge,
+            downloadFolderPrimary = project.downloadFolderPrimary,
+            downloadSubfolders = project.downloadSubfolders,
+            showDownloadToast = project.showDownloadToast
         )
 
         if (customIcon != null) {
@@ -513,6 +517,16 @@ class ProjectRepository(private val context: Context) {
       </div>
     </div>
     <button class="btn" onclick="startDownload()">UNDUH SEKARANG</button>
+  </div>
+
+  <div class="card">
+    <h3>Uji Download Bridge (MediaStore Native)</h3>
+    <p>Simpan file langsung ke <b>Download/Neo Downloader/mp4/</b> dan <b>Download/Neo Downloader/mp3/</b> lewat JavaScript native bridge ber-chunk:</p>
+    <div class="action-buttons">
+      <button type="button" class="btn" style="background:#00E5FF;color:#060D17;" onclick="testNativeSaveMp4()">🎬 Simpan ke /mp4/ (MediaStore)</button>
+      <button type="button" class="btn" style="background:#00E676;color:#060D17;" onclick="testNativeSaveMp3()">🎵 Simpan ke /mp3/ (MediaStore)</button>
+    </div>
+    <div id="bridgeStatus" style="font-size:12px;color:#A0B2C6;margin-top:8px;word-break:break-all;">Status Bridge: Siap diuji</div>
   </div>
 
   <div class="card">
@@ -775,6 +789,54 @@ function testOverlayPermission() {
     bridge.requestOverlayPermission();
   } else {
     alert('Izin overlay bridge tidak tersedia.');
+  }
+}
+
+function testNativeSaveMp4() {
+  var statusEl = document.getElementById('bridgeStatus');
+  if (statusEl) statusEl.textContent = 'Memulai penyimpanan mp4...';
+  if (window.AndroidBridge && typeof window.AndroidBridge.isAvailable === 'function' && window.AndroidBridge.isAvailable()) {
+    try {
+      var fname = 'Neo_video_' + Date.now() + '.mp4';
+      var saveId = AndroidBridge.beginSave('mp4', fname, 'video/mp4');
+      if (!saveId || saveId.indexOf('ERROR:') === 0) {
+        if (statusEl) statusEl.textContent = 'Gagal inisialisasi: ' + saveId;
+        return;
+      }
+      // Sample MP4 header chunk
+      var sampleMp4B64 = 'AAAAIGZ0eXBpc29tAAACAGlzb21pc28yYXZjMW1wNDEAAAAIZnJlZQAAAAs=';
+      AndroidBridge.appendChunk(saveId, sampleMp4B64);
+      var result = AndroidBridge.finishSave(saveId);
+      if (statusEl) statusEl.textContent = '✔ Sukses: ' + result;
+    } catch(e) {
+      if (statusEl) statusEl.textContent = 'Error: ' + e.message;
+    }
+  } else {
+    if (statusEl) statusEl.textContent = 'AndroidBridge tidak tersedia.';
+  }
+}
+
+function testNativeSaveMp3() {
+  var statusEl = document.getElementById('bridgeStatus');
+  if (statusEl) statusEl.textContent = 'Memulai penyimpanan mp3...';
+  if (window.AndroidBridge && typeof window.AndroidBridge.isAvailable === 'function' && window.AndroidBridge.isAvailable()) {
+    try {
+      var fname = 'Neo_audio_' + Date.now() + '.mp3';
+      var saveId = AndroidBridge.beginSave('mp3', fname, 'audio/mpeg');
+      if (!saveId || saveId.indexOf('ERROR:') === 0) {
+        if (statusEl) statusEl.textContent = 'Gagal inisialisasi: ' + saveId;
+        return;
+      }
+      // Sample MP3 ID3 chunk
+      var sampleMp3B64 = 'SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU4Ljc2LjEwMAAAAAAAAAAAAAAA';
+      AndroidBridge.appendChunk(saveId, sampleMp3B64);
+      var result = AndroidBridge.finishSave(saveId);
+      if (statusEl) statusEl.textContent = '✔ Sukses: ' + result;
+    } catch(e) {
+      if (statusEl) statusEl.textContent = 'Error: ' + e.message;
+    }
+  } else {
+    if (statusEl) statusEl.textContent = 'AndroidBridge tidak tersedia.';
   }
 }
             """.trimIndent(),

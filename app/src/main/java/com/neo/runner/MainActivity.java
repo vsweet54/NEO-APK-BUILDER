@@ -79,6 +79,10 @@ public class MainActivity extends Activity {
     private String appName = "NEO App";
     private String packageName = "com.neo.app";
     private boolean autoPipEnabled = false;
+    private boolean enableDownloadBridge = true;
+    private String downloadFolderPrimary = "Neo Downloader";
+    private String downloadSubfolders = "mp4, mp3";
+    private boolean showDownloadToast = true;
 
     private final ExecutorService ioExecutor = Executors.newFixedThreadPool(4);
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
@@ -125,6 +129,11 @@ public class MainActivity extends Activity {
                         WindowManager.LayoutParams.FLAG_FULLSCREEN
                     );
                 }
+
+                enableDownloadBridge = obj.optBoolean("enableDownloadBridge", true);
+                downloadFolderPrimary = obj.optString("downloadFolderPrimary", "Neo Downloader");
+                downloadSubfolders = obj.optString("downloadSubfolders", "mp4, mp3");
+                showDownloadToast = obj.optBoolean("showDownloadToast", true);
             }
         } catch (Throwable ignored) {
         }
@@ -195,7 +204,9 @@ public class MainActivity extends Activity {
     private void setupClipboardAndBridge() {
         NeoBridge bridge = new NeoBridge();
         webView.addJavascriptInterface(bridge, "NeoAndroid");
-        webView.addJavascriptInterface(bridge, "AndroidBridge");
+        if (enableDownloadBridge) {
+            webView.addJavascriptInterface(new DownloadBridge(this), "AndroidBridge");
+        }
     }
 
     private void loadWebProject() {
@@ -1444,11 +1455,276 @@ public class MainActivity extends Activity {
                 obj.put("pipSupported", isPipSupported());
                 obj.put("overlaySupported", true);
                 obj.put("realEsrganSupported", true);
-                obj.put("aiRuntime", "Native Real-ESRGAN 4K Engine");
+                obj.put("downloadBridgeSupported", enableDownloadBridge);
+                obj.put("primaryFolder", downloadFolderPrimary);
                 obj.put("version", "2.1-Pro");
                 return obj.toString();
             } catch (Throwable t) {
                 return "{}";
+            }
+        }
+    }
+
+    // ==================== DOWNLOAD BRIDGE (MEDIASTORE SUBFOLDER STORAGE) ====================
+
+    public static class DownloadSaveSession {
+        final String saveId;
+        final String subfolder;
+        final String sanitizedName;
+        final String mimeType;
+        final OutputStream outputStream;
+        final Uri mediaStoreUri;
+        final File targetFile;
+        final String relativeDisplayPath;
+
+        public DownloadSaveSession(String saveId, String subfolder, String sanitizedName, String mimeType,
+                                   OutputStream outputStream, Uri mediaStoreUri, File targetFile, String relativeDisplayPath) {
+            this.saveId = saveId;
+            this.subfolder = subfolder;
+            this.sanitizedName = sanitizedName;
+            this.mimeType = mimeType;
+            this.outputStream = outputStream;
+            this.mediaStoreUri = mediaStoreUri;
+            this.targetFile = targetFile;
+            this.relativeDisplayPath = relativeDisplayPath;
+        }
+    }
+
+    public class DownloadBridge {
+        private final Context bridgeContext;
+        private final java.util.concurrent.ConcurrentHashMap<String, DownloadSaveSession> activeSaveSessions =
+                new java.util.concurrent.ConcurrentHashMap<>();
+
+        public DownloadBridge(Context context) {
+            this.bridgeContext = context;
+        }
+
+        private boolean isSubfolderAllowed(String subfolder) {
+            if (subfolder == null || subfolder.trim().isEmpty()) return false;
+            String clean = subfolder.trim().toLowerCase();
+            String[] configured = downloadSubfolders.split(",");
+            java.util.HashSet<String> validSet = new java.util.HashSet<>();
+            for (String s : configured) {
+                String t = s.trim().toLowerCase();
+                if (!t.isEmpty()) validSet.add(t);
+            }
+            if (validSet.isEmpty()) {
+                validSet.add("mp4");
+                validSet.add("mp3");
+            }
+            return validSet.contains(clean);
+        }
+
+        private String sanitizeFileName(String filename) {
+            if (filename == null || filename.trim().isEmpty()) {
+                return "file_" + System.currentTimeMillis();
+            }
+            String name = filename.replace('\\', '/').trim();
+            int slash = name.lastIndexOf('/');
+            if (slash != -1) {
+                name = name.substring(slash + 1);
+            }
+            name = name.replace("..", "_");
+            name = name.replaceAll("[/\\\\:*?\"<>|]", "_");
+            if (name.trim().isEmpty() || name.equals(".") || name.equals("_")) {
+                name = "file_" + System.currentTimeMillis();
+            }
+            return name;
+        }
+
+        @JavascriptInterface
+        public boolean isAvailable() {
+            return true;
+        }
+
+        @JavascriptInterface
+        public String beginSave(final String subfolder, final String filename, final String mimeType) {
+            try {
+                FutureTask<String> task = new FutureTask<>(new Callable<String>() {
+                    @Override
+                    public String call() {
+                        try {
+                            String sub = (subfolder != null) ? subfolder.trim().toLowerCase() : "";
+                            if (!isSubfolderAllowed(sub)) {
+                                return "ERROR: Subfolder tidak diizinkan. Hanya 'mp4' atau 'mp3' yang diterima.";
+                            }
+
+                            String safeName = sanitizeFileName(filename);
+                            String effMime = mimeType;
+                            if (effMime == null || effMime.trim().isEmpty()) {
+                                if ("mp4".equals(sub)) effMime = "video/mp4";
+                                else if ("mp3".equals(sub)) effMime = "audio/mpeg";
+                                else effMime = "application/octet-stream";
+                            } else {
+                                effMime = effMime.trim();
+                            }
+
+                            // Ensure valid extension for subfolder
+                            if ("mp4".equals(sub) && !safeName.toLowerCase().endsWith(".mp4")) {
+                                int dot = safeName.lastIndexOf('.');
+                                safeName = (dot != -1) ? safeName.substring(0, dot) + ".mp4" : safeName + ".mp4";
+                            } else if ("mp3".equals(sub) && !safeName.toLowerCase().endsWith(".mp3")) {
+                                int dot = safeName.lastIndexOf('.');
+                                safeName = (dot != -1) ? safeName.substring(0, dot) + ".mp3" : safeName + ".mp3";
+                            }
+
+                            String primary = (downloadFolderPrimary != null && !downloadFolderPrimary.trim().isEmpty()) ?
+                                    downloadFolderPrimary.trim() : "Neo Downloader";
+                            String relativeDir = "Download/" + primary + "/" + sub;
+                            String saveId = "save_" + System.currentTimeMillis() + "_" + java.util.UUID.randomUUID().toString().substring(0, 8);
+
+                            // Android 10+ (API 29+): MediaStore scoped storage with relative path
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                                try {
+                                    ContentResolver resolver = getContentResolver();
+                                    ContentValues values = new ContentValues();
+                                    values.put(MediaStore.Downloads.DISPLAY_NAME, safeName);
+                                    values.put(MediaStore.Downloads.MIME_TYPE, effMime);
+                                    values.put(MediaStore.Downloads.RELATIVE_PATH, relativeDir + "/");
+                                    values.put(MediaStore.Downloads.IS_PENDING, 1);
+
+                                    Uri uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values);
+                                    if (uri != null) {
+                                        OutputStream os = resolver.openOutputStream(uri);
+                                        if (os != null) {
+                                            DownloadSaveSession session = new DownloadSaveSession(
+                                                saveId, sub, safeName, effMime, os, uri, null, relativeDir + "/" + safeName
+                                            );
+                                            activeSaveSessions.put(saveId, session);
+                                            return saveId;
+                                        }
+                                    }
+                                } catch (Throwable t) {
+                                    Log.w(TAG, "MediaStore insert fallback to public storage: " + t.getMessage());
+                                }
+                            }
+
+                            // Android 9 and below: Direct public downloads storage
+                            File baseDownloads = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
+                            File targetDir = new File(new File(baseDownloads, primary), sub);
+                            if (!targetDir.exists()) {
+                                targetDir.mkdirs();
+                            }
+
+                            File destFile = new File(targetDir, safeName);
+                            if (destFile.exists()) {
+                                int dot = safeName.lastIndexOf('.');
+                                String base = (dot != -1) ? safeName.substring(0, dot) : safeName;
+                                String ext = (dot != -1) ? safeName.substring(dot) : "";
+                                destFile = new File(targetDir, base + "_" + System.currentTimeMillis() + ext);
+                            }
+
+                            FileOutputStream fos = new FileOutputStream(destFile);
+                            DownloadSaveSession session = new DownloadSaveSession(
+                                saveId, sub, destFile.getName(), effMime, fos, null, destFile, relativeDir + "/" + destFile.getName()
+                            );
+                            activeSaveSessions.put(saveId, session);
+                            return saveId;
+                        } catch (Throwable t) {
+                            Log.e(TAG, "beginSave error: " + t.getMessage(), t);
+                            return "ERROR: " + (t.getMessage() != null ? t.getMessage() : "Kesalahan inisialisasi penyimpanan berkas");
+                        }
+                    }
+                });
+
+                ioExecutor.execute(task);
+                return task.get(30, TimeUnit.SECONDS);
+            } catch (Throwable t) {
+                Log.e(TAG, "beginSave async error: " + t.getMessage(), t);
+                return "ERROR: " + (t.getMessage() != null ? t.getMessage() : "Timeout atau kesalahan proses");
+            }
+        }
+
+        @JavascriptInterface
+        public boolean appendChunk(final String saveId, final String base64Chunk) {
+            if (saveId == null || saveId.trim().isEmpty() || base64Chunk == null) return false;
+            final DownloadSaveSession session = activeSaveSessions.get(saveId);
+            if (session == null) return false;
+
+            try {
+                FutureTask<Boolean> task = new FutureTask<>(new Callable<Boolean>() {
+                    @Override
+                    public Boolean call() {
+                        try {
+                            String clean = base64Chunk.contains(",") ?
+                                    base64Chunk.substring(base64Chunk.indexOf(",") + 1) : base64Chunk;
+                            byte[] bytes = Base64.decode(clean, Base64.DEFAULT);
+                            if (bytes != null && bytes.length > 0) {
+                                session.outputStream.write(bytes);
+                                session.outputStream.flush();
+                            }
+                            return true;
+                        } catch (Throwable t) {
+                            Log.e(TAG, "appendChunk error: " + t.getMessage(), t);
+                            return false;
+                        }
+                    }
+                });
+
+                ioExecutor.execute(task);
+                return task.get(60, TimeUnit.SECONDS);
+            } catch (Throwable t) {
+                Log.e(TAG, "appendChunk async error: " + t.getMessage(), t);
+                return false;
+            }
+        }
+
+        @JavascriptInterface
+        public String finishSave(final String saveId) {
+            if (saveId == null || saveId.trim().isEmpty()) return "ERROR: saveId kosong";
+            final DownloadSaveSession session = activeSaveSessions.remove(saveId);
+            if (session == null) return "ERROR: Sesi simpan tidak ditemukan atau sudah selesai";
+
+            try {
+                FutureTask<String> task = new FutureTask<>(new Callable<String>() {
+                    @Override
+                    public String call() {
+                        try {
+                            try {
+                                session.outputStream.flush();
+                                session.outputStream.close();
+                            } catch (Throwable ignored) {}
+
+                            String finalPath = session.relativeDisplayPath;
+
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && session.mediaStoreUri != null) {
+                                ContentResolver resolver = getContentResolver();
+                                ContentValues values = new ContentValues();
+                                values.put(MediaStore.Downloads.IS_PENDING, 0);
+                                resolver.update(session.mediaStoreUri, values, null, null);
+                                notifyMediaScanner(finalPath);
+                            } else if (session.targetFile != null) {
+                                notifyMediaScanner(session.targetFile.getAbsolutePath());
+                                finalPath = session.relativeDisplayPath;
+                            }
+
+                            final String finalFolderDesc = "Download/" +
+                                    ((downloadFolderPrimary != null && !downloadFolderPrimary.trim().isEmpty()) ?
+                                            downloadFolderPrimary.trim() : "Neo Downloader") +
+                                    "/" + session.subfolder;
+
+                            if (showDownloadToast) {
+                                mainHandler.post(new Runnable() {
+                                    @Override
+                                    public void run() {
+                                        Toast.makeText(MainActivity.this, "Tersimpan di " + finalFolderDesc, Toast.LENGTH_LONG).show();
+                                    }
+                                });
+                            }
+
+                            return finalPath;
+                        } catch (Throwable t) {
+                            Log.e(TAG, "finishSave error: " + t.getMessage(), t);
+                            return "ERROR: " + (t.getMessage() != null ? t.getMessage() : "Gagal menyelesaikan penulisan berkas");
+                        }
+                    }
+                });
+
+                ioExecutor.execute(task);
+                return task.get(30, TimeUnit.SECONDS);
+            } catch (Throwable t) {
+                Log.e(TAG, "finishSave async error: " + t.getMessage(), t);
+                return "ERROR: " + (t.getMessage() != null ? t.getMessage() : "Timeout penyelesaian berkas");
             }
         }
     }

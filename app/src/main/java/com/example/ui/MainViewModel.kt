@@ -404,7 +404,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         buildType: String,
         nativeBridge: Boolean,
         domStorage: Boolean,
-        permissions: String
+        permissions: String,
+        enableDownloadBridge: Boolean = true,
+        downloadFolderPrimary: String = "Neo Downloader",
+        downloadSubfolders: String = "mp4, mp3",
+        showDownloadToast: Boolean = true
     ) {
         val current = _selectedProject.value ?: return
         viewModelScope.launch {
@@ -420,7 +424,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 buildType = buildType,
                 nativeBridge = nativeBridge,
                 domStorage = domStorage,
-                permissions = permissions
+                permissions = permissions,
+                enableDownloadBridge = enableDownloadBridge,
+                downloadFolderPrimary = downloadFolderPrimary,
+                downloadSubfolders = downloadSubfolders,
+                showDownloadToast = showDownloadToast
             )
             repository.updateProject(updated)
             _selectedProject.value = updated
